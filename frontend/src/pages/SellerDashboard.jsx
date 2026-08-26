@@ -1,517 +1,1774 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import DashboardLayout from '../components/DashboardLayout';
 import { apiService } from '../services/api';
 import {
-  Gavel, Plus, ShieldCheck, Ticket, CheckCircle2, XCircle, Clock,
-  PauseCircle, PlayCircle, Snowflake, Lock, Building2, MapPin, Users,
-  AlertCircle, RefreshCw, Award, DollarSign
+  Gavel, Plus, ShieldCheck, Ticket, CheckCircle2, XCircle, Clock, PauseCircle,
+  PlayCircle, Snowflake, Lock, Building2, MapPin, DollarSign, Users, AlertCircle,
+  ArrowRight, Phone, Mail, Award, Check, RefreshCw, Eye, Sparkles, TrendingUp,
+  Settings, Bell, User, ArrowLeft
 } from 'lucide-react';
 
-const DEFAULT_FORM = {
-  property_id: '',
-  starting_price: '',
-  minimum_increment: '1',
-  duration_hours: '24',
-  max_participants: '10',
-  auction_start: ''
-};
-
-export default function SellerDashboard({ user }) {
+export default function SellerDashboard({ user, onLogout }) {
   const navigate = useNavigate();
-  const sellerId = user?.email || 'seller@apexrealty.com';
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') || 'dashboard';
 
   const [auctions, setAuctions] = useState([]);
   const [properties, setProperties] = useState([]);
-  const [selectedAuctionId, setSelectedAuctionId] = useState('');
-  const [tab, setTab] = useState('management');
-  const [form, setForm] = useState(DEFAULT_FORM);
-  const [saleAuction, setSaleAuction] = useState(null);
-  const [selectedBuyerId, setSelectedBuyerId] = useState('');
-  const [finalPrice, setFinalPrice] = useState('');
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState({ type: '', text: '' });
+  const [selectedAuction, setSelectedAuction] = useState(null);
+  const [actionMsg, setActionMsg] = useState({ type: '', text: '' });
 
-  const selectedAuction = useMemo(
-    () => auctions.find(a => a.auction_id === selectedAuctionId) || auctions[0] || null,
-    [auctions, selectedAuctionId]
+  // Add Property Form
+  const [propForm, setPropForm] = useState({
+    name: '',
+    locality: '',
+    city: 'Bengaluru',
+    price: '',
+    bhk: '3',
+    area_sqft: '1500',
+    type: 'Apartment',
+    image:
+      'https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=800&q=80',
+    description: ''
+  });
+
+  const [addPropSuccess, setAddPropSuccess] = useState(false);
+
+  // Auction Creation Form
+  const [createForm, setCreateForm] = useState({
+    property_id: '',
+    starting_price: '',
+    minimum_increment: '1',
+    duration_hours: '24',
+    max_participants: '10',
+    auction_start: new Date().toISOString().slice(0, 16)
+  });
+
+  const [creating, setCreating] = useState(false);
+
+  // Manual Sell Modal State
+  const [showSellModal, setShowSellModal] = useState(false);
+  const [auctionToSell, setAuctionToSell] = useState(null);
+  const [selectedBuyerId, setSelectedBuyerId] = useState('');
+  const [customFinalPrice, setCustomFinalPrice] = useState('');
+  const [selling, setSelling] = useState(false);
+
+  const sellerId = user ? user.email : 'seller@apexrealty.com';
+
+  // Keep all pending buyer requests in one place
+  const pendingRegistrations = auctions.flatMap(auc =>
+    (auc.registrations || [])
+      .filter(reg => reg.status === 'PENDING')
+      .map(reg => ({
+        ...reg,
+        auction_id: auc.auction_id,
+        auction_name: auc.property?.name || auc.auction_id
+      }))
   );
 
-  const availableProperties = useMemo(
-    () => properties.filter(p => !p.isSold && p.status !== 'Sold'),
-    [properties]
-  );
+  const handleTabChange = tabId => {
+    setSearchParams({ tab: tabId });
+  };
 
-  const showMessage = (type, text) => setMessage({ type, text });
-
-  const fetchData = async (silent = false) => {
-    if (!silent) setLoading(true);
+  const fetchData = async () => {
     try {
-      const [auctionRes, propertyRes] = await Promise.all([
+      const [aucRes, propRes] = await Promise.all([
         apiService.getAuctions(),
         apiService.getProperties()
       ]);
 
-      const ownAuctions = (auctionRes.auctions || []).filter(
-        a => String(a.seller_id || '').toLowerCase() === String(sellerId).toLowerCase()
-      );
+      if (aucRes && aucRes.auctions) {
+        setAuctions(aucRes.auctions);
 
-      setAuctions(ownAuctions);
-      setProperties(propertyRes.properties || []);
+        setSelectedAuction(prev => {
+          const pendingAuction = aucRes.auctions.find(a =>
+            (a.registrations || []).some(r => r.status === 'PENDING')
+          );
 
-      if (selectedAuctionId && ownAuctions.some(a => a.auction_id === selectedAuctionId)) {
-        return;
+          if (!prev) {
+            return pendingAuction || aucRes.auctions[0] || null;
+          }
+
+          const updated = aucRes.auctions.find(
+            a => a.auction_id === prev.auction_id
+          );
+
+          return updated || pendingAuction || prev;
+        });
       }
-      if (ownAuctions.length) setSelectedAuctionId(ownAuctions[0].auction_id);
-    } catch (error) {
-      showMessage('error', error.response?.data?.error || error.message || 'Failed to load seller data.');
+
+      if (propRes && propRes.properties) {
+        setProperties(propRes.properties);
+      }
+    } catch (err) {
+      console.error('Error fetching seller dashboard data:', err);
     } finally {
-      if (!silent) setLoading(false);
+      setLoading(false);
     }
   };
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(() => fetchData(true), 3000);
+
+    const interval = setInterval(fetchData, 5000);
+
     return () => clearInterval(interval);
-  }, [sellerId]);
+  }, []);
 
-  const handleCreateAuction = async (event) => {
-    event.preventDefault();
+  const handleUpdateAuctionStatus = async (auctionId, newStatus) => {
+    setActionMsg({ type: '', text: '' });
 
-    if (!form.property_id || !form.starting_price) {
-      showMessage('error', 'Select a property and enter a starting price.');
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const res = await apiService.createAuction({
-        property_id: form.property_id,
-        seller_id: sellerId,
-        starting_price: Number(form.starting_price),
-        minimum_increment: Number(form.minimum_increment || 1),
-        duration_hours: Number(form.duration_hours || 24),
-        max_participants: Number(form.max_participants || 10),
-        auction_start: form.auction_start
-          ? new Date(form.auction_start).toISOString()
-          : new Date().toISOString()
-      });
-
-      setForm(DEFAULT_FORM);
-      setSelectedAuctionId(res.auction.auction_id);
-      showMessage('success', 'Auction created. Registration is now open.');
-      setTab('management');
-      await fetchData(true);
-    } catch (error) {
-      showMessage('error', error.response?.data?.error || error.message || 'Failed to create auction.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const updateStatus = async (status) => {
-    if (!selectedAuction) return;
-    setBusy(true);
     try {
       const res = await apiService.updateAuctionStatus(
-        selectedAuction.auction_id,
-        status,
+        auctionId,
+        newStatus,
         sellerId
       );
-      setSelectedAuctionId(res.auction.auction_id);
-      showMessage('success', `Auction is now ${res.auction.status.replaceAll('_', ' ')}.`);
-      await fetchData(true);
-    } catch (error) {
-      showMessage('error', error.response?.data?.error || error.message || 'Failed to update auction status.');
-    } finally {
-      setBusy(false);
+
+      setActionMsg({
+        type: 'success',
+        text: `Auction status updated to ${newStatus.replace('_', ' ')}!`
+      });
+
+      if (res.auction) {
+        setSelectedAuction(res.auction);
+      }
+
+      fetchData();
+    } catch (err) {
+      setActionMsg({
+        type: 'error',
+        text:
+          err.response?.data?.error ||
+          err.message ||
+          'Failed to update auction status.'
+      });
     }
   };
 
-  const updateRegistration = async (registration, status) => {
-    setBusy(true);
-    try {
-      await apiService.updateRegistrationStatus(registration.id, status, sellerId);
-      showMessage(
-        'success',
-        status === 'APPROVED'
-          ? `Token issued to ${registration.buyer_name || registration.buyer_id}.`
-          : 'Registration request rejected.'
-      );
-      await fetchData(true);
-    } catch (error) {
-      showMessage('error', error.response?.data?.error || error.message || 'Failed to update registration.');
-    } finally {
-      setBusy(false);
-    }
-  };
+  const handleRegistrationAction = async (registrationId, newStatus) => {
+    setActionMsg({ type: '', text: '' });
 
-  const openSale = (auction) => {
-    const candidates = auction.distinct_bidders?.length
-      ? auction.distinct_bidders
-      : (auction.participants || []).map(p => ({
-          buyer_id: p.buyer_id,
-          bidder_name: p.buyer_name,
-          highest_bid: 0,
-          email: p.buyer_email
-        }));
+    if (!registrationId) {
+      setActionMsg({
+        type: 'error',
+        text: 'Registration ID is missing. Refresh the seller page and try again.'
+      });
 
-    const top = candidates[0];
-    setSaleAuction(auction);
-    setSelectedBuyerId(top?.buyer_id || '');
-    setFinalPrice(String(auction.current_highest_bid || auction.starting_price || ''));
-  };
-
-  const finalizeSale = async (event) => {
-    event.preventDefault();
-    if (!saleAuction || !selectedBuyerId) {
-      showMessage('error', 'Select an authorized buyer before finalizing the sale.');
       return;
     }
 
-    setBusy(true);
     try {
-      const res = await apiService.sellProperty(
-        saleAuction.auction_id,
-        selectedBuyerId,
-        Number(finalPrice),
+      await apiService.updateRegistrationStatus(
+        registrationId,
+        newStatus,
         sellerId
       );
 
-      setSaleAuction(null);
-      showMessage('success', 'Property sold successfully. Opening the transaction summary.');
-      await fetchData(true);
-      navigate(`/auction-result/${res.auction.auction_id}`);
-    } catch (error) {
-      showMessage('error', error.response?.data?.error || error.message || 'Failed to finalize sale.');
+      setActionMsg({
+        type: 'success',
+        text: `Registration request ${newStatus.toLowerCase()}! Token issued.`
+      });
+
+      fetchData();
+    } catch (err) {
+      setActionMsg({
+        type: 'error',
+        text:
+          err.response?.data?.error ||
+          err.message ||
+          'Failed to update registration status.'
+      });
+    }
+  };
+
+  const handleAddPropertySubmit = e => {
+    e.preventDefault();
+
+    const newProp = {
+      id: `prop_${Date.now()}`,
+      ...propForm,
+      price: parseFloat(propForm.price) || 120,
+      bhk: parseInt(propForm.bhk, 10) || 3,
+      area_sqft: parseInt(propForm.area_sqft, 10) || 1500,
+      price_per_sqft: Math.round(
+        ((parseFloat(propForm.price) || 120) * 100000) /
+          (parseInt(propForm.area_sqft, 10) || 1500)
+      )
+    };
+
+    setProperties([newProp, ...properties]);
+    setAddPropSuccess(true);
+
+    setTimeout(() => setAddPropSuccess(false), 4000);
+  };
+
+  const handleCreateAuctionSubmit = async e => {
+    e.preventDefault();
+
+    setCreating(true);
+    setActionMsg({ type: '', text: '' });
+
+    try {
+      const selectedProp = properties.find(
+        p => String(p.id) === String(createForm.property_id)
+      );
+
+      const res = await apiService.createAuction({
+        ...createForm,
+        seller_id: sellerId,
+        starting_price:
+          createForm.starting_price || selectedProp?.price || 100
+      });
+
+      setActionMsg({
+        type: 'success',
+        text: `Auction Created Successfully! ID: ${res.auction?.auction_id}`
+      });
+
+      fetchData();
+      handleTabChange('auction-management');
+    } catch (err) {
+      setActionMsg({
+        type: 'error',
+        text:
+          err.response?.data?.error ||
+          err.message ||
+          'Failed to create auction.'
+      });
     } finally {
-      setBusy(false);
+      setCreating(false);
     }
   };
 
-  const statusActions = () => {
-    if (!selectedAuction) return null;
-    const status = selectedAuction.status;
+  /*
+   * ============================================================
+   * FIXED SELL MODAL
+   * ============================================================
+   *
+   * current_highest_bidder is normally a buyer ID:
+   *     usr-buyer-7080
+   *
+   * It is NOT an email.
+   *
+   * So first try to find buyer_email from the auction data.
+   * If it is not available, leave the email field empty so
+   * the seller can enter the buyer's actual email.
+   */
+  const handleOpenSellModal = auc => {
+    setAuctionToSell(auc);
 
-    if (status === 'REGISTRATION_OPEN') {
-      return (
-        <>
-          <button disabled={busy} onClick={() => updateStatus('REGISTRATION_CLOSED')} className="action slate"><Lock className="w-4 h-4" /> Close Registration</button>
-          <button disabled={busy} onClick={() => updateStatus('LIVE')} className="action green"><PlayCircle className="w-4 h-4" /> Start Live</button>
-        </>
-      );
+    let buyerEmail = '';
+
+    // Try direct email fields
+    if (auc.current_highest_bidder_email) {
+      buyerEmail = auc.current_highest_bidder_email;
+    } else if (auc.highest_bidder_email) {
+      buyerEmail = auc.highest_bidder_email;
     }
 
-    if (status === 'REGISTRATION_CLOSED') {
-      return (
-        <>
-          <button disabled={busy} onClick={() => updateStatus('REGISTRATION_OPEN')} className="action blue"><Ticket className="w-4 h-4" /> Reopen Registration</button>
-          <button disabled={busy} onClick={() => updateStatus('LIVE')} className="action green"><PlayCircle className="w-4 h-4" /> Start Live</button>
-        </>
+    // Try participants
+    if (!buyerEmail && Array.isArray(auc.participants)) {
+      const highestBuyer = auc.participants.find(
+        p =>
+          p.buyer_id === auc.current_highest_bidder ||
+          p.buyer_id === auc.highest_bidder_id
       );
+
+      if (highestBuyer) {
+        buyerEmail =
+          highestBuyer.buyer_email ||
+          highestBuyer.email ||
+          '';
+      }
     }
 
-    if (status === 'LIVE') {
-      return (
-        <>
-          <button disabled={busy} onClick={() => updateStatus('PAUSED')} className="action amber"><PauseCircle className="w-4 h-4" /> Pause</button>
-          <button disabled={busy} onClick={() => updateStatus('FROZEN')} className="action cyan"><Snowflake className="w-4 h-4" /> Freeze Bids</button>
-          <button disabled={busy} onClick={() => updateStatus('ENDED')} className="action slate"><Lock className="w-4 h-4" /> End Bidding</button>
-        </>
+    // Try registrations
+    if (!buyerEmail && Array.isArray(auc.registrations)) {
+      const highestRegistration = auc.registrations.find(
+        r =>
+          r.buyer_id === auc.current_highest_bidder ||
+          r.buyer_id === auc.highest_bidder_id
       );
+
+      if (highestRegistration) {
+        buyerEmail =
+          highestRegistration.buyer_email ||
+          highestRegistration.email ||
+          '';
+      }
     }
 
-    if (status === 'PAUSED') {
-      return (
-        <>
-          <button disabled={busy} onClick={() => updateStatus('LIVE')} className="action green"><PlayCircle className="w-4 h-4" /> Resume</button>
-          <button disabled={busy} onClick={() => updateStatus('FROZEN')} className="action cyan"><Snowflake className="w-4 h-4" /> Freeze</button>
-          <button disabled={busy} onClick={() => updateStatus('ENDED')} className="action slate"><Lock className="w-4 h-4" /> End Bidding</button>
-        </>
-      );
-    }
+    setSelectedBuyerId(buyerEmail);
 
-    if (status === 'FROZEN') {
-      return (
-        <>
-          <button disabled={busy} onClick={() => updateStatus('LIVE')} className="action green"><PlayCircle className="w-4 h-4" /> Resume Bidding</button>
-          <button disabled={busy} onClick={() => updateStatus('ENDED')} className="action slate"><Lock className="w-4 h-4" /> End Bidding</button>
-        </>
-      );
-    }
-
-    return null;
-  };
-
-  if (loading) {
-    return (
-      <div className="max-w-5xl mx-auto py-20 text-center">
-        <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />
-        <p className="mt-4 text-sm font-bold text-slate-600">Loading seller auction control center...</p>
-      </div>
+    setCustomFinalPrice(
+      auc.current_highest_bid ||
+        auc.starting_price ||
+        ''
     );
-  }
+
+    setShowSellModal(true);
+  };
+
+  /*
+   * ============================================================
+   * FINALIZE SALE
+   * ============================================================
+   */
+  const handleFinalizeManualSale = async e => {
+    e.preventDefault();
+
+    if (!selectedBuyerId || !selectedBuyerId.includes('@')) {
+      setActionMsg({
+        type: 'error',
+        text: 'Please enter a valid buyer email.'
+      });
+
+      return;
+    }
+
+    if (!customFinalPrice) {
+      setActionMsg({
+        type: 'error',
+        text: 'Please enter the final sale amount.'
+      });
+
+      return;
+    }
+
+    if (!auctionToSell) {
+      setActionMsg({
+        type: 'error',
+        text: 'No auction selected.'
+      });
+
+      return;
+    }
+
+    setSelling(true);
+
+    try {
+      await apiService.completeManualSale(
+        auctionToSell.auction_id,
+        selectedBuyerId,
+        customFinalPrice,
+        sellerId
+      );
+
+      setActionMsg({
+        type: 'success',
+        text: `Property sold successfully to ${selectedBuyerId} for ₹${customFinalPrice} Lakhs!`
+      });
+
+      setShowSellModal(false);
+      setAuctionToSell(null);
+      setSelectedBuyerId('');
+      setCustomFinalPrice('');
+
+      await fetchData();
+    } catch (err) {
+      setActionMsg({
+        type: 'error',
+        text:
+          err.response?.data?.error ||
+          err.message ||
+          'Failed to sell property.'
+      });
+    } finally {
+      setSelling(false);
+    }
+  };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-7">
-      <style>{`
-        .action{display:inline-flex;align-items:center;gap:.4rem;padding:.6rem .8rem;border-radius:.75rem;font-size:.72rem;font-weight:800;cursor:pointer;border:1px solid transparent}
-        .action:disabled{opacity:.5;cursor:not-allowed}
-        .blue{background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe}.green{background:#dcfce7;color:#15803d;border-color:#bbf7d0}
-        .amber{background:#fef3c7;color:#b45309;border-color:#fde68a}.cyan{background:#cffafe;color:#0e7490;border-color:#a5f3fc}
-        .slate{background:#f1f5f9;color:#334155;border-color:#cbd5e1}
-      `}</style>
-
-      <div className="bg-gradient-to-r from-blue-950 via-slate-900 to-indigo-950 rounded-3xl p-8 text-white shadow-xl">
-        <div className="flex items-center gap-2 text-blue-300 text-xs font-black uppercase tracking-wider">
-          <ShieldCheck className="w-4 h-4" /> Seller Command Center
-        </div>
-        <h1 className="font-heading text-3xl font-black mt-3">Seller-Controlled Auction Flow</h1>
-        <p className="text-sm text-slate-300 mt-2 max-w-3xl">
-          Create an auction, review buyer token requests, authorize participants, control live bidding,
-          and select the final buyer.
-        </p>
-      </div>
-
-      {message.text && (
-        <div className={`p-4 rounded-2xl border text-sm font-bold flex items-center gap-3 ${
-          message.type === 'error'
-            ? 'bg-rose-50 text-rose-700 border-rose-200'
-            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-        }`}>
-          {message.type === 'error'
-            ? <AlertCircle className="w-5 h-5" />
-            : <CheckCircle2 className="w-5 h-5" />}
-          {message.text}
-        </div>
-      )}
-
-      <div className="flex gap-2 flex-wrap">
-        <button onClick={() => setTab('management')} className={`px-5 py-2.5 rounded-xl text-xs font-black ${tab === 'management' ? 'bg-blue-600 text-white' : 'bg-white border text-slate-700'}`}>
-          <Gavel className="w-4 h-4 inline mr-2" />Auction Management ({auctions.length})
-        </button>
-        <button onClick={() => setTab('create')} className={`px-5 py-2.5 rounded-xl text-xs font-black ${tab === 'create' ? 'bg-blue-600 text-white' : 'bg-white border text-slate-700'}`}>
-          <Plus className="w-4 h-4 inline mr-2" />Create Auction
-        </button>
-        <button onClick={() => fetchData()} className="ml-auto px-4 py-2.5 rounded-xl text-xs font-bold bg-white border border-slate-200 text-slate-600">
-          <RefreshCw className="w-4 h-4 inline mr-2" />Refresh
-        </button>
-      </div>
-
-      {tab === 'create' && (
-        <form onSubmit={handleCreateAuction} className="bg-white rounded-3xl border border-slate-200 shadow-lg p-7 space-y-6">
-          <div>
-            <h2 className="font-heading text-xl font-black text-slate-900">Create New Property Auction</h2>
-            <p className="text-xs text-slate-500 mt-1">Registration opens immediately after creation.</p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <label className="space-y-2 text-xs font-bold">
-              Property
-              <select required value={form.property_id} onChange={e => setForm({...form, property_id:e.target.value})} className="w-full p-3 rounded-xl border border-slate-200 bg-slate-50">
-                <option value="">Select property</option>
-                {availableProperties.map(p => (
-                  <option key={p.id} value={p.id}>{p.name} — {p.city} — ₹{p.price} Lakhs</option>
-                ))}
-              </select>
-            </label>
-
-            <label className="space-y-2 text-xs font-bold">
-              Starting Price (₹ Lakhs)
-              <input required min="0.01" step="0.01" type="number" value={form.starting_price} onChange={e => setForm({...form, starting_price:e.target.value})} className="w-full p-3 rounded-xl border border-slate-200 bg-slate-50" />
-            </label>
-
-            <label className="space-y-2 text-xs font-bold">
-              Minimum Increment (₹ Lakhs)
-              <input required min="0.01" step="0.01" type="number" value={form.minimum_increment} onChange={e => setForm({...form, minimum_increment:e.target.value})} className="w-full p-3 rounded-xl border border-slate-200 bg-slate-50" />
-            </label>
-
-            <label className="space-y-2 text-xs font-bold">
-              Duration (hours)
-              <input required min="1" step="1" type="number" value={form.duration_hours} onChange={e => setForm({...form, duration_hours:e.target.value})} className="w-full p-3 rounded-xl border border-slate-200 bg-slate-50" />
-            </label>
-
-            <label className="space-y-2 text-xs font-bold">
-              Maximum Participants
-              <input required min="1" step="1" type="number" value={form.max_participants} onChange={e => setForm({...form, max_participants:e.target.value})} className="w-full p-3 rounded-xl border border-slate-200 bg-slate-50" />
-            </label>
-
-            <label className="space-y-2 text-xs font-bold">
-              Start Date & Time
-              <input type="datetime-local" value={form.auction_start} onChange={e => setForm({...form, auction_start:e.target.value})} className="w-full p-3 rounded-xl border border-slate-200 bg-slate-50" />
-            </label>
-          </div>
-
-          <button disabled={busy || !availableProperties.length} className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-black">
-            {busy ? 'Creating...' : 'Create Auction & Open Registration'}
+    <DashboardLayout
+      user={user}
+      onLogout={onLogout}
+      activeTab={activeTab}
+      onTabChange={handleTabChange}
+    >
+      {/* Universal Go Back Button */}
+      {activeTab !== 'dashboard' && (
+        <div className="mb-4">
+          <button
+            onClick={() => handleTabChange('dashboard')}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-white hover:bg-slate-100 text-slate-800 rounded-xl text-xs font-extrabold transition-all border border-slate-200 cursor-pointer shadow-xs hover:shadow-sm"
+          >
+            <ArrowLeft className="w-4 h-4 text-emerald-600" />
+            Back to Dashboard
           </button>
-        </form>
+        </div>
       )}
 
-      {tab === 'management' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <aside className="lg:col-span-4 bg-white rounded-3xl border border-slate-200 shadow-sm p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-heading font-black">Your Auctions</h2>
-              <span className="text-xs font-bold text-slate-500">{auctions.length}</span>
+      {/* =========================================================
+          SELLER DASHBOARD
+      ========================================================= */}
+      {activeTab === 'dashboard' && (
+        <div className="space-y-8">
+
+          {/* Welcome Banner */}
+          <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-slate-900 rounded-3xl p-8 text-white shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-2 bg-emerald-500/20 px-3 py-1 rounded-full text-xs font-bold text-emerald-300 border border-emerald-400/20">
+                <Building2 className="w-3.5 h-3.5 text-emerald-300" />
+                Seller Portal • Listing & Auction Command Center
+              </div>
+
+              <h1 className="font-heading text-3xl font-extrabold tracking-tight">
+                Welcome back, {user?.name || 'Seller'}!
+              </h1>
+
+              <p className="text-xs sm:text-sm text-slate-300">
+                Manage your listings, schedule seller-controlled auctions,
+                approve buyer pass requests, and execute sales.
+              </p>
             </div>
 
-            {auctions.length === 0 ? (
-              <div className="py-12 text-center text-slate-500">
-                <Building2 className="w-9 h-9 mx-auto text-slate-300" />
-                <p className="text-xs font-bold mt-3">No auctions yet.</p>
-                <button onClick={() => setTab('create')} className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold">Create First Auction</button>
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-[650px] overflow-y-auto">
-                {auctions.map(auction => (
-                  <button key={auction.auction_id} onClick={() => setSelectedAuctionId(auction.auction_id)} className={`w-full text-left p-4 rounded-2xl border transition ${
-                    selectedAuction?.auction_id === auction.auction_id
-                      ? 'bg-blue-50 border-blue-300'
-                      : 'bg-slate-50 border-slate-200 hover:bg-white'
-                  }`}>
-                    <div className="flex justify-between gap-3">
-                      <span className="font-bold text-sm truncate">{auction.property?.name || auction.property_id}</span>
-                      <span className="text-[9px] font-black px-2 py-1 rounded-full bg-slate-200 shrink-0">{auction.status.replaceAll('_',' ')}</span>
-                    </div>
-                    <p className="text-[11px] text-slate-500 mt-2">Highest: ₹{auction.current_highest_bid || auction.starting_price} Lakhs</p>
-                    <p className="text-[11px] text-slate-500">{auction.total_participants} authorized participants · {auction.total_bids} bids</p>
-                  </button>
-                ))}
-              </div>
-            )}
-          </aside>
+            <button
+              onClick={() => handleTabChange('add-property')}
+              className="px-5 py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center gap-2 shrink-0 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              Add New Property
+            </button>
+          </div>
 
-          {selectedAuction && (
-            <section className="lg:col-span-8 space-y-5">
-              <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-                <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-5">
+          {/* Stats */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+              <span className="text-[10px] uppercase font-extrabold text-slate-400">
+                Listed Properties
+              </span>
+
+              <strong className="text-2xl font-black text-slate-900 block">
+                {properties.length}
+              </strong>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+              <span className="text-[10px] uppercase font-extrabold text-emerald-600">
+                Active Auctions
+              </span>
+
+              <strong className="text-2xl font-black text-emerald-600 block">
+                {
+                  auctions.filter(
+                    a =>
+                      a.status !== 'COMPLETED' &&
+                      a.status !== 'CANCELLED'
+                  ).length
+                }
+              </strong>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+              <span className="text-[10px] uppercase font-extrabold text-blue-600">
+                Pending Pass Requests
+              </span>
+
+              <strong className="text-2xl font-black text-blue-600 block">
+                {auctions.reduce(
+                  (acc, a) =>
+                    acc +
+                    (a.registrations?.filter(
+                      r => r.status === 'PENDING'
+                    ).length || 0),
+                  0
+                )}
+              </strong>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
+              <span className="text-[10px] uppercase font-extrabold text-amber-600">
+                Sold Properties
+              </span>
+
+              <strong className="text-2xl font-black text-amber-600 block">
+                {auctions.filter(a => a.status === 'COMPLETED').length}
+              </strong>
+            </div>
+
+          </div>
+
+          {/* Quick Actions */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+            <div
+              onClick={() => handleTabChange('add-property')}
+              className="bg-white hover:bg-emerald-50/50 border border-slate-200 rounded-2xl p-5 cursor-pointer transition-all shadow-xs flex items-center justify-between group"
+            >
+              <div className="flex items-center gap-4">
+
+                <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-md shrink-0">
+                  <Plus className="w-6 h-6" />
+                </div>
+
+                <div>
+                  <h3 className="font-heading font-extrabold text-slate-900 text-sm group-hover:text-emerald-600">
+                    Add Property
+                  </h3>
+
+                  <p className="text-xs text-slate-500">
+                    List new real estate offering
+                  </p>
+                </div>
+              </div>
+
+              <ArrowRight className="w-4 h-4 text-slate-400 group-hover:translate-x-1 transition-transform" />
+            </div>
+
+            <div
+              onClick={() => handleTabChange('create-auction')}
+              className="bg-white hover:bg-emerald-50/50 border border-slate-200 rounded-2xl p-5 cursor-pointer transition-all shadow-xs flex items-center justify-between group"
+            >
+              <div className="flex items-center gap-4">
+
+                <div className="w-12 h-12 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-md shrink-0">
+                  <Gavel className="w-6 h-6" />
+                </div>
+
+                <div>
+                  <h3 className="font-heading font-extrabold text-slate-900 text-sm group-hover:text-emerald-600">
+                    Create Auction
+                  </h3>
+
+                  <p className="text-xs text-slate-500">
+                    Launch a live bidding event
+                  </p>
+                </div>
+              </div>
+
+              <ArrowRight className="w-4 h-4 text-slate-400 group-hover:translate-x-1 transition-transform" />
+            </div>
+
+            <div
+              onClick={() => handleTabChange('auction-management')}
+              className="bg-white hover:bg-emerald-50/50 border border-slate-200 rounded-2xl p-5 cursor-pointer transition-all shadow-xs flex items-center justify-between group"
+            >
+              <div className="flex items-center gap-4">
+
+                <div className="w-12 h-12 rounded-2xl bg-slate-800 text-white flex items-center justify-center shadow-md shrink-0">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+
+                <div>
+                  <h3 className="font-heading font-extrabold text-slate-900 text-sm group-hover:text-emerald-600">
+                    Auction Control
+                  </h3>
+
+                  <p className="text-xs text-slate-500">
+                    Approve passes & controls
+                  </p>
+                </div>
+              </div>
+
+              <ArrowRight className="w-4 h-4 text-slate-400 group-hover:translate-x-1 transition-transform" />
+            </div>
+
+          </div>
+
+          {/* Properties Overview */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
+
+            <div className="flex items-center justify-between">
+              <h2 className="font-heading text-lg font-bold text-slate-900">
+                Your Properties Overview
+              </h2>
+
+              <button
+                onClick={() => handleTabChange('my-properties')}
+                className="text-xs font-extrabold text-emerald-600 hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                View All
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+
+              {properties.slice(0, 3).map(p => (
+                <div
+                  key={p.id}
+                  className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3"
+                >
+                  <div className="h-32 rounded-xl overflow-hidden bg-slate-200 relative">
+
+                    <img
+                      src={p.image}
+                      alt={p.name}
+                      className="w-full h-full object-cover"
+                    />
+
+                    <span className="absolute bottom-2 left-2 bg-slate-900/80 backdrop-blur-md text-white px-2 py-0.5 rounded text-[10px] font-bold">
+                      {p.city}
+                    </span>
+
+                  </div>
+
                   <div>
-                    <div className="flex items-center gap-2 text-xs text-blue-600 font-bold">
-                      <Gavel className="w-4 h-4" /> {selectedAuction.auction_id}
-                    </div>
-                    <h2 className="font-heading text-2xl font-black mt-1">{selectedAuction.property?.name || 'Property Auction'}</h2>
-                    <p className="text-xs text-slate-500 mt-1 flex items-center gap-1">
-                      <MapPin className="w-3 h-3" /> {selectedAuction.property?.locality}, {selectedAuction.property?.city}
+                    <h3 className="font-bold text-slate-900 text-xs line-clamp-1">
+                      {p.name}
+                    </h3>
+
+                    <p className="text-emerald-700 font-extrabold text-xs mt-0.5">
+                      ₹{p.price} Lakhs
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">{statusActions()}</div>
+
                 </div>
+              ))}
 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
-                  <div className="p-4 bg-slate-50 rounded-2xl"><p className="text-[10px] uppercase font-bold text-slate-500">Status</p><p className="font-black text-sm mt-1">{selectedAuction.status.replaceAll('_',' ')}</p></div>
-                  <div className="p-4 bg-slate-50 rounded-2xl"><p className="text-[10px] uppercase font-bold text-slate-500">Starting</p><p className="font-black text-sm mt-1">₹{selectedAuction.starting_price} L</p></div>
-                  <div className="p-4 bg-slate-50 rounded-2xl"><p className="text-[10px] uppercase font-bold text-slate-500">Highest Bid</p><p className="font-black text-sm text-emerald-600 mt-1">₹{selectedAuction.current_highest_bid || selectedAuction.starting_price} L</p></div>
-                  <div className="p-4 bg-slate-50 rounded-2xl"><p className="text-[10px] uppercase font-bold text-slate-500">Participants</p><p className="font-black text-sm mt-1">{selectedAuction.total_participants} / {selectedAuction.max_participants}</p></div>
-                </div>
-              </div>
+            </div>
+          </div>
 
-              <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h3 className="font-heading text-lg font-black">Buyer Token Requests</h3>
-                    <p className="text-xs text-slate-500">Approve only buyers you want to authorize for this auction.</p>
-                  </div>
-                  <Ticket className="w-6 h-6 text-blue-600" />
-                </div>
-
-                <div className="space-y-3">
-                  {(selectedAuction.registrations || []).length === 0 ? (
-                    <p className="text-xs text-slate-400 py-6 text-center">No registration requests yet.</p>
-                  ) : (
-                    selectedAuction.registrations.map(reg => (
-                      <div key={reg.id} className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                        <div>
-                          <p className="font-bold text-sm">{reg.buyer_name || 'Buyer'}</p>
-                          <p className="text-xs text-slate-500">{reg.buyer_email || reg.buyer_id}</p>
-                          <p className="text-[10px] text-slate-400 mt-1">Requested {new Date(reg.requested_at).toLocaleString('en-IN')}</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-black ${
-                            reg.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-800'
-                            : reg.status === 'REJECTED' ? 'bg-rose-100 text-rose-800'
-                            : 'bg-amber-100 text-amber-800'
-                          }`}>{reg.status}</span>
-                          {reg.status === 'PENDING' && (
-                            <>
-                              <button disabled={busy} onClick={() => updateRegistration(reg, 'APPROVED')} className="px-3 py-2 bg-emerald-600 text-white rounded-lg text-[10px] font-black"><CheckCircle2 className="w-3 h-3 inline mr-1" />Approve</button>
-                              <button disabled={busy} onClick={() => updateRegistration(reg, 'REJECTED')} className="px-3 py-2 bg-rose-600 text-white rounded-lg text-[10px] font-black"><XCircle className="w-3 h-3 inline mr-1" />Reject</button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h3 className="font-heading text-lg font-black">Bidders & Final Sale</h3>
-                    <p className="text-xs text-slate-500">Highest bidder is only a candidate; you make the final sale decision.</p>
-                  </div>
-                  <Award className="w-6 h-6 text-amber-500" />
-                </div>
-
-                <div className="space-y-2">
-                  {(selectedAuction.distinct_bidders || []).map((bidder, index) => (
-                    <div key={bidder.buyer_id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200">
-                      <div>
-                        <p className="text-xs font-bold">{index === 0 ? '🏆 ' : ''}{bidder.bidder_name}</p>
-                        <p className="text-[10px] text-slate-500">{bidder.email} · {bidder.bid_count} bid(s)</p>
-                      </div>
-                      <p className="font-black text-sm text-emerald-600">₹{bidder.highest_bid} L</p>
-                    </div>
-                  ))}
-
-                  {(selectedAuction.distinct_bidders || []).length === 0 && (
-                    <p className="text-xs text-slate-400 py-4 text-center">No bids have been placed yet.</p>
-                  )}
-
-                  {!['COMPLETED','CLOSED','CANCELLED'].includes(selectedAuction.status) && (
-                    <button onClick={() => openSale(selectedAuction)} disabled={!selectedAuction.participants?.length} className="w-full mt-4 py-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white rounded-xl text-xs font-black">
-                      <DollarSign className="w-4 h-4 inline mr-1" /> Finalize Property Sale
-                    </button>
-                  )}
-                </div>
-              </div>
-            </section>
-          )}
         </div>
       )}
 
-      {saleAuction && (
-        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <form onSubmit={finalizeSale} className="w-full max-w-lg bg-white rounded-3xl shadow-2xl p-7 space-y-5">
+      {/* =========================================================
+          MY PROPERTIES
+      ========================================================= */}
+      {activeTab === 'my-properties' && (
+        <div className="space-y-6">
+
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 flex items-center justify-between">
+
             <div>
-              <h2 className="font-heading text-xl font-black">Finalize Property Sale</h2>
-              <p className="text-xs text-slate-500 mt-1">Only authorized participants can be selected. Final price cannot be below the highest bid.</p>
+              <h2 className="font-heading text-xl font-extrabold text-slate-900 flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-emerald-600" />
+                My Listed Properties ({properties.length})
+              </h2>
+
+              <p className="text-xs text-slate-500">
+                Real estate inventory submitted under your account
+              </p>
             </div>
 
-            <label className="space-y-2 block text-xs font-bold">
-              Select Buyer
-              <select required value={selectedBuyerId} onChange={e => setSelectedBuyerId(e.target.value)} className="w-full p-3 rounded-xl border border-slate-200 bg-slate-50">
-                <option value="">Select authorized buyer</option>
-                {(saleAuction.participants || []).map(p => (
-                  <option key={p.participant_id} value={p.buyer_id}>{p.buyer_name} — {p.buyer_email}</option>
-                ))}
-              </select>
-            </label>
+            <button
+              onClick={() => handleTabChange('add-property')}
+              className="px-4 py-2 bg-emerald-600 text-white font-bold text-xs rounded-xl shadow-xs hover:bg-emerald-700 cursor-pointer flex items-center gap-1.5"
+            >
+              <Plus className="w-4 h-4" />
+              Add Property
+            </button>
 
-            <label className="space-y-2 block text-xs font-bold">
-              Final Selling Price (₹ Lakhs)
-              <input required min={saleAuction.current_highest_bid || saleAuction.starting_price} step="0.01" type="number" value={finalPrice} onChange={e => setFinalPrice(e.target.value)} className="w-full p-3 rounded-xl border border-slate-200 bg-slate-50" />
-            </label>
+          </div>
 
-            <div className="flex gap-3">
-              <button type="button" onClick={() => setSaleAuction(null)} className="flex-1 py-3 rounded-xl bg-slate-100 text-slate-700 text-xs font-black">Cancel</button>
-              <button disabled={busy} className="flex-1 py-3 rounded-xl bg-amber-500 text-white text-xs font-black">{busy ? 'Finalizing...' : 'Confirm Sale'}</button>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+
+            {properties.map(p => (
+              <div
+                key={p.id}
+                className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs space-y-3 p-4"
+              >
+
+                <img
+                  src={p.image}
+                  alt={p.name}
+                  className="w-full h-40 object-cover rounded-xl"
+                />
+
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">
+                    {p.name}
+                  </h3>
+
+                  <p className="text-xs text-slate-500">
+                    {p.city} • {p.area_sqft || p.area} sqft
+                  </p>
+
+                  <p className="text-emerald-600 font-extrabold text-sm mt-1">
+                    ₹{p.price} Lakhs
+                  </p>
+                </div>
+
+              </div>
+            ))}
+
+          </div>
+
+        </div>
+      )}
+
+      {/* =========================================================
+          ADD PROPERTY
+      ========================================================= */}
+      {activeTab === 'add-property' && (
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-xs max-w-3xl space-y-6">
+
+          <div>
+            <h2 className="font-heading text-xl font-extrabold text-slate-900 flex items-center gap-2">
+              <Plus className="w-5 h-5 text-emerald-600" />
+              List New Property
+            </h2>
+
+            <p className="text-xs text-slate-500">
+              Enter property details for market listing and auction enabling
+            </p>
+          </div>
+
+          {addPropSuccess && (
+            <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-2xl flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              Property added successfully to your inventory!
             </div>
+          )}
+
+          <form
+            onSubmit={handleAddPropertySubmit}
+            className="space-y-4 text-xs"
+          >
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Property Name
+                </label>
+
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Grand Sapphire Heights"
+                  value={propForm.name}
+                  onChange={e =>
+                    setPropForm({
+                      ...propForm,
+                      name: e.target.value
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  City
+                </label>
+
+                <select
+                  value={propForm.city}
+                  onChange={e =>
+                    setPropForm({
+                      ...propForm,
+                      city: e.target.value
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-semibold"
+                >
+                  <option value="Bangalore">
+                    Bangalore (Bengaluru)
+                  </option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Locality
+                </label>
+
+                <input
+                  type="text"
+                  placeholder="e.g. Indiranagar"
+                  value={propForm.locality}
+                  onChange={e =>
+                    setPropForm({
+                      ...propForm,
+                      locality: e.target.value
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Listed Price (₹ Lakhs)
+                </label>
+
+                <input
+                  type="number"
+                  required
+                  placeholder="150"
+                  value={propForm.price}
+                  onChange={e =>
+                    setPropForm({
+                      ...propForm,
+                      price: e.target.value
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  BHK Config
+                </label>
+
+                <input
+                  type="number"
+                  value={propForm.bhk}
+                  onChange={e =>
+                    setPropForm({
+                      ...propForm,
+                      bhk: e.target.value
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Area (Sq. Ft.)
+                </label>
+
+                <input
+                  type="number"
+                  value={propForm.area_sqft}
+                  onChange={e =>
+                    setPropForm({
+                      ...propForm,
+                      area_sqft: e.target.value
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                />
+              </div>
+
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">
+                Image URL
+              </label>
+
+              <input
+                type="text"
+                value={propForm.image}
+                onChange={e =>
+                  setPropForm({
+                    ...propForm,
+                    image: e.target.value
+                  })
+                }
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md cursor-pointer"
+            >
+              Submit Listing
+            </button>
+
           </form>
         </div>
       )}
-    </div>
+
+      {/* =========================================================
+          MANAGE PROPERTIES
+      ========================================================= */}
+      {activeTab === 'manage-properties' && (
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-xs space-y-6">
+
+          <h2 className="font-heading text-xl font-extrabold text-slate-900 flex items-center gap-2">
+            <Settings className="w-5 h-5 text-emerald-600" />
+            Inventory Management
+          </h2>
+
+          <div className="overflow-x-auto">
+
+            <table className="w-full text-left text-xs border-collapse">
+
+              <thead>
+                <tr className="border-b border-slate-200 text-slate-400 uppercase text-[10px] font-black">
+                  <th className="py-3 px-2">Property</th>
+                  <th className="py-3 px-2">City</th>
+                  <th className="py-3 px-2">Price</th>
+                  <th className="py-3 px-2">Status</th>
+                  <th className="py-3 px-2">Actions</th>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y divide-slate-100">
+
+                {properties.map(p => (
+                  <tr key={p.id}>
+
+                    <td className="py-3 px-2 font-bold text-slate-900">
+                      {p.name}
+                    </td>
+
+                    <td className="py-3 px-2 text-slate-600">
+                      {p.city}
+                    </td>
+
+                    <td className="py-3 px-2 font-bold text-emerald-600">
+                      ₹{p.price} L
+                    </td>
+
+                    <td className="py-3 px-2">
+                      <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 font-bold rounded text-[10px]">
+                        Active
+                      </span>
+                    </td>
+
+                    <td className="py-3 px-2">
+
+                      <button
+                        onClick={() => {
+                          setCreateForm({
+                            ...createForm,
+                            property_id: String(p.id),
+                            starting_price: String(p.price)
+                          });
+
+                          handleTabChange('create-auction');
+                        }}
+                        className="px-2.5 py-1 bg-amber-500 text-white font-bold rounded text-[10px] cursor-pointer"
+                      >
+                        Create Auction
+                      </button>
+
+                    </td>
+
+                  </tr>
+                ))}
+
+              </tbody>
+
+            </table>
+
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================
+          CREATE AUCTION
+      ========================================================= */}
+      {activeTab === 'create-auction' && (
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-xs max-w-2xl space-y-6">
+
+          <div>
+            <h2 className="font-heading text-xl font-extrabold text-slate-900 flex items-center gap-2">
+              <Gavel className="w-5 h-5 text-amber-500" />
+              Schedule Real Estate Auction
+            </h2>
+
+            <p className="text-xs text-slate-500">
+              Configure reserve price, duration, and participant cap for bidding event
+            </p>
+          </div>
+
+          {actionMsg.text && (
+            <div
+              className={`p-4 rounded-2xl text-xs font-bold ${
+                actionMsg.type === 'success'
+                  ? 'bg-emerald-50 text-emerald-800'
+                  : 'bg-rose-50 text-rose-800'
+              }`}
+            >
+              {actionMsg.text}
+            </div>
+          )}
+
+          <form
+            onSubmit={handleCreateAuctionSubmit}
+            className="space-y-4 text-xs"
+          >
+
+            <div>
+
+              <label className="block font-bold text-slate-700 mb-1">
+                Select Property
+              </label>
+
+              <select
+                required
+                value={createForm.property_id}
+                onChange={e => {
+                  const pid = e.target.value;
+
+                  const found = properties.find(
+                    p => String(p.id) === String(pid)
+                  );
+
+                  setCreateForm({
+                    ...createForm,
+                    property_id: pid,
+                    starting_price: found
+                      ? String(found.price)
+                      : ''
+                  });
+                }}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-semibold"
+              >
+
+                <option value="">
+                  Select a property from inventory...
+                </option>
+
+                {properties.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.city} - ₹{p.price} Lakhs)
+                  </option>
+                ))}
+
+              </select>
+
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+              <div>
+
+                <label className="block font-bold text-slate-700 mb-1">
+                  Starting Price (₹ Lakhs)
+                </label>
+
+                <input
+                  type="number"
+                  required
+                  value={createForm.starting_price}
+                  onChange={e =>
+                    setCreateForm({
+                      ...createForm,
+                      starting_price: e.target.value
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                />
+
+              </div>
+
+              <div>
+
+                <label className="block font-bold text-slate-700 mb-1">
+                  Minimum Bid Increment (₹ Lakhs)
+                </label>
+
+                <input
+                  type="number"
+                  required
+                  value={createForm.minimum_increment}
+                  onChange={e =>
+                    setCreateForm({
+                      ...createForm,
+                      minimum_increment: e.target.value
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                />
+
+              </div>
+
+              <div>
+
+                <label className="block font-bold text-slate-700 mb-1">
+                  Duration (Hours)
+                </label>
+
+                <input
+                  type="number"
+                  required
+                  value={createForm.duration_hours}
+                  onChange={e =>
+                    setCreateForm({
+                      ...createForm,
+                      duration_hours: e.target.value
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                />
+
+              </div>
+
+              <div>
+
+                <label className="block font-bold text-slate-700 mb-1">
+                  Max Bidders
+                </label>
+
+                <input
+                  type="number"
+                  value={createForm.max_participants}
+                  onChange={e =>
+                    setCreateForm({
+                      ...createForm,
+                      max_participants: e.target.value
+                    })
+                  }
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                />
+
+              </div>
+
+            </div>
+
+            <button
+              type="submit"
+              disabled={creating}
+              className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-md cursor-pointer"
+            >
+              {creating
+                ? 'Creating Auction...'
+                : 'Launch Live Auction'}
+            </button>
+
+          </form>
+        </div>
+      )}
+
+      {/* =========================================================
+          AUCTION MANAGEMENT
+      ========================================================= */}
+      {activeTab === 'auction-management' && (
+        <div className="space-y-6">
+
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 flex items-center justify-between">
+
+            <div>
+              <h2 className="font-heading text-xl font-extrabold text-slate-900 flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-emerald-600" />
+                Auction Control & Buyer Token Approvals
+              </h2>
+
+              <p className="text-xs text-slate-500">
+                Approve bidder registration requests and manage live state
+              </p>
+            </div>
+
+            <button
+              onClick={fetchData}
+              className="p-2 text-slate-500 hover:text-slate-800 rounded-xl border border-slate-200 cursor-pointer"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+
+          </div>
+
+          {actionMsg.text && (
+            <div
+              className={`p-4 rounded-2xl text-xs font-bold ${
+                actionMsg.type === 'success'
+                  ? 'bg-emerald-50 text-emerald-800'
+                  : 'bg-rose-50 text-rose-800'
+              }`}
+            >
+              {actionMsg.text}
+            </div>
+          )}
+
+          {/* Pending Buyer Approvals */}
+          <div className="bg-white p-6 rounded-3xl border border-blue-200 shadow-sm">
+
+            <div className="flex items-center justify-between mb-4">
+
+              <div>
+                <h3 className="font-heading text-lg font-extrabold text-slate-900 flex items-center gap-2">
+                  <Ticket className="w-5 h-5 text-blue-600" />
+                  Pending Buyer Token Requests
+                </h3>
+
+                <p className="text-xs text-slate-500 mt-1">
+                  Approve a buyer here to issue their auction token and allow them into the live bidding room.
+                </p>
+              </div>
+
+              <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-xs font-black">
+                {pendingRegistrations.length} Pending
+              </span>
+
+            </div>
+
+            {pendingRegistrations.length === 0 ? (
+
+              <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 text-center">
+
+                <CheckCircle2 className="w-7 h-7 mx-auto text-emerald-500 mb-2" />
+
+                <p className="text-sm font-bold text-slate-700">
+                  No pending buyer requests
+                </p>
+
+                <p className="text-xs text-slate-400 mt-1">
+                  New registration requests will appear here automatically.
+                </p>
+
+              </div>
+
+            ) : (
+
+              <div className="space-y-3">
+
+                {pendingRegistrations.map(reg => (
+
+                  <div
+                    key={reg.id || reg.registration_id}
+                    className="p-4 rounded-2xl border border-blue-100 bg-blue-50/50 flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+                  >
+
+                    <div className="min-w-0">
+
+                      <div className="flex items-center gap-2 flex-wrap">
+
+                        <strong className="text-sm text-slate-900">
+                          {reg.buyer_name || reg.buyer_id}
+                        </strong>
+
+                        <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[9px] font-black">
+                          PENDING
+                        </span>
+
+                      </div>
+
+                      <p className="text-xs text-slate-600 mt-1">
+                        Auction: <strong>{reg.auction_name}</strong>
+                      </p>
+
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Buyer ID: {reg.buyer_id}
+                        {reg.buyer_email
+                          ? ` • ${reg.buyer_email}`
+                          : ''}
+                        {reg.deposit_amount != null
+                          ? ` • Deposit: ₹${reg.deposit_amount} Lakhs`
+                          : ''}
+                      </p>
+
+                    </div>
+
+                    <div className="flex gap-2 shrink-0">
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const auc = auctions.find(
+                            a => a.auction_id === reg.auction_id
+                          );
+
+                          if (auc) {
+                            setSelectedAuction(auc);
+                          }
+
+                          handleRegistrationAction(
+                            reg.id || reg.registration_id,
+                            'APPROVED'
+                          );
+                        }}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl cursor-pointer flex items-center gap-1.5 shadow-sm"
+                      >
+                        <Check className="w-4 h-4" />
+                        Approve & Issue Token
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleRegistrationAction(
+                            reg.id || reg.registration_id,
+                            'REJECTED'
+                          )
+                        }
+                        className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl cursor-pointer flex items-center gap-1.5 shadow-sm"
+                      >
+                        <XCircle className="w-4 h-4" />
+                        Reject
+                      </button>
+
+                    </div>
+
+                  </div>
+
+                ))}
+
+              </div>
+
+            )}
+
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+            {/* Auction List */}
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 space-y-3">
+
+              <h3 className="font-bold text-xs uppercase text-slate-400">
+                Your Auctions
+              </h3>
+
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+
+                {auctions.map(auc => (
+
+                  <button
+                    type="button"
+                    key={auc.auction_id}
+                    onClick={() => setSelectedAuction(auc)}
+                    className={`w-full text-left p-3 rounded-2xl border text-xs cursor-pointer transition-all space-y-1 ${
+                      selectedAuction?.auction_id === auc.auction_id
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-bold'
+                        : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+
+                    <div className="flex justify-between items-center">
+
+                      <span className="font-extrabold truncate max-w-[150px]">
+                        {auc.property?.name || auc.auction_id}
+                      </span>
+
+                      <span className="px-2 py-0.5 bg-slate-200 text-slate-800 rounded-full text-[9px] font-black">
+                        {auc.status}
+                      </span>
+
+                    </div>
+
+                    <p className="text-[10px] text-slate-500">
+                      Highest Bid: ₹
+                      {auc.current_highest_bid || auc.starting_price}
+                      {' '}Lakhs
+                    </p>
+
+                  </button>
+
+                ))}
+
+              </div>
+
+            </div>
+
+            {/* Selected Auction */}
+            {selectedAuction && (
+
+              <div className="lg:col-span-2 bg-white p-6 rounded-3xl border border-slate-200 space-y-6">
+
+                <div className="flex justify-between items-start border-b border-slate-100 pb-4">
+
+                  <div>
+
+                    <h3 className="font-heading text-lg font-extrabold text-slate-900">
+                      {selectedAuction.property?.name ||
+                        selectedAuction.auction_id}
+                    </h3>
+
+                    <p className="text-xs text-slate-500">
+                      ID: {selectedAuction.auction_id} • Status:{' '}
+                      <strong className="text-emerald-600">
+                        {selectedAuction.status}
+                      </strong>
+                    </p>
+
+                  </div>
+
+                  <div className="flex gap-2">
+
+                    {(selectedAuction.status === 'UPCOMING' ||
+                      selectedAuction.status === 'REGISTRATION_OPEN') && (
+                      <button
+                        onClick={() =>
+                          handleUpdateAuctionStatus(
+                            selectedAuction.auction_id,
+                            'LIVE'
+                          )
+                        }
+                        className="px-3 py-1.5 bg-emerald-600 text-white font-bold text-xs rounded-xl cursor-pointer"
+                      >
+                        Start Live
+                      </button>
+                    )}
+
+                    {selectedAuction.status === 'LIVE' && (
+                      <button
+                        onClick={() =>
+                          handleUpdateAuctionStatus(
+                            selectedAuction.auction_id,
+                            'PAUSED'
+                          )
+                        }
+                        className="px-3 py-1.5 bg-amber-500 text-white font-bold text-xs rounded-xl cursor-pointer"
+                      >
+                        Pause
+                      </button>
+                    )}
+
+                    {selectedAuction.status === 'PAUSED' && (
+                      <button
+                        onClick={() =>
+                          handleUpdateAuctionStatus(
+                            selectedAuction.auction_id,
+                            'LIVE'
+                          )
+                        }
+                        className="px-3 py-1.5 bg-emerald-600 text-white font-bold text-xs rounded-xl cursor-pointer"
+                      >
+                        Resume
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() =>
+                        handleOpenSellModal(selectedAuction)
+                      }
+                      className="px-3 py-1.5 bg-blue-600 text-white font-bold text-xs rounded-xl cursor-pointer"
+                    >
+                      Sell Property
+                    </button>
+
+                  </div>
+
+                </div>
+
+                {/* Pending Requests */}
+                <div className="space-y-3">
+
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="font-bold text-xs uppercase text-slate-400">
+                      Pending Buyer Pass Requests
+                    </h4>
+                    <span
+                      className={`text-[10px] font-bold px-2 py-1 rounded-full ${
+                        selectedAuction.registration_open === false
+                          ? 'bg-slate-100 text-slate-500'
+                          : 'bg-emerald-50 text-emerald-600'
+                      }`}
+                    >
+                      {selectedAuction.registration_open === false
+                        ? 'REGISTRATION CLOSED'
+                        : 'REGISTRATION OPEN'}
+                    </span>
+                  </div>
+
+                  {(!selectedAuction.registrations ||
+                    selectedAuction.registrations.length === 0) ? (
+
+                    <p className="text-xs text-slate-400">
+                      No pass requests submitted yet.
+                    </p>
+
+                  ) : (
+
+                    <div className="space-y-2">
+
+                      {selectedAuction.registrations.map(reg => (
+
+                        <div
+                          key={reg.id || reg.registration_id}
+                          className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between text-xs"
+                        >
+
+                          <div>
+
+                            <strong className="text-slate-900 block">
+                              {reg.buyer_name || reg.buyer_id}
+                            </strong>
+
+                            <span className="text-[10px] text-slate-500">
+                              Pass Deposit: ₹{reg.deposit_amount} Lakhs •
+                              Status: {reg.status}
+                            </span>
+
+                          </div>
+
+                          {reg.status === 'PENDING' && (
+
+                            <div className="flex gap-2">
+
+                              <button
+                                onClick={() =>
+                                  handleRegistrationAction(
+                                    reg.id || reg.registration_id,
+                                    'APPROVED'
+                                  )
+                                }
+                                className="px-3 py-1 bg-emerald-600 text-white font-bold text-[10px] rounded-lg cursor-pointer"
+                              >
+                                Approve & Issue Token
+                              </button>
+
+                              <button
+                                onClick={() =>
+                                  handleRegistrationAction(
+                                    reg.id || reg.registration_id,
+                                    'REJECTED'
+                                  )
+                                }
+                                className="px-3 py-1 bg-rose-600 text-white font-bold text-[10px] rounded-lg cursor-pointer"
+                              >
+                                Reject
+                              </button>
+
+                            </div>
+
+                          )}
+
+                        </div>
+
+                      ))}
+
+                    </div>
+
+                  )}
+
+                </div>
+
+              </div>
+
+            )}
+
+          </div>
+
+        </div>
+      )}
+
+      {/* =========================================================
+          SOLD PROPERTIES
+      ========================================================= */}
+      {activeTab === 'sold-properties' && (
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-xs space-y-6">
+
+          <h2 className="font-heading text-xl font-extrabold text-slate-900 flex items-center gap-2">
+            <DollarSign className="w-5 h-5 text-emerald-600" />
+            Sold Property Registry
+          </h2>
+
+          <div className="space-y-3">
+
+            {auctions
+              .filter(a => a.status === 'COMPLETED')
+              .map(auc => (
+
+                <div
+                  key={auc.auction_id}
+                  className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 flex items-center justify-between text-xs"
+                >
+
+                  <div>
+
+                    <strong className="text-slate-900 block text-sm">
+                      {auc.property?.name || auc.auction_id}
+                    </strong>
+
+                    <span className="text-slate-600">
+                      Buyer:{' '}
+                      {auc.current_highest_bidder ||
+                        'Direct Purchaser'}
+                    </span>
+
+                  </div>
+
+                  <div className="text-right">
+
+                    <span className="text-emerald-700 font-extrabold text-base block">
+                      ₹
+                      {auc.current_highest_bid ||
+                        auc.starting_price}{' '}
+                      Lakhs
+                    </span>
+
+                    <span className="text-[10px] bg-emerald-200 text-emerald-900 font-bold px-2 py-0.5 rounded-md">
+                      Transaction Closed
+                    </span>
+
+                  </div>
+
+                </div>
+
+              ))}
+
+          </div>
+
+        </div>
+      )}
+
+      {/* =========================================================
+          ANALYTICS
+      ========================================================= */}
+      {activeTab === 'analytics' && (
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-xs space-y-6">
+
+          <h2 className="font-heading text-xl font-extrabold text-slate-900 flex items-center gap-2">
+            <TrendingUp className="w-5 h-5 text-emerald-600" />
+            Market & Listing Analytics
+          </h2>
+
+          <div className="p-6 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 text-xs">
+
+            <strong className="text-slate-900 text-sm block">
+              Listing Performance Summary
+            </strong>
+
+            <p className="text-slate-600">
+              Average bidding competition ratio across your auctions is
+              4.2 participants per property with average price realization
+              14% above reserve price.
+            </p>
+
+          </div>
+
+        </div>
+      )}
+
+      {/* =========================================================
+          NOTIFICATIONS
+      ========================================================= */}
+      {activeTab === 'notifications' && (
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-xs space-y-6">
+
+          <h2 className="font-heading text-xl font-extrabold text-slate-900 flex items-center gap-2">
+            <Bell className="w-5 h-5 text-emerald-600" />
+            Seller Notifications
+          </h2>
+
+          <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 text-xs">
+
+            <strong className="text-emerald-900 block">
+              New Pass Request
+            </strong>
+
+            <p className="text-slate-700">
+              A buyer submitted a deposit request for Whitefield Villa Auction.
+            </p>
+
+          </div>
+
+        </div>
+      )}
+
+      {/* =========================================================
+          PROFILE
+      ========================================================= */}
+      {activeTab === 'profile' && (
+        <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-xs max-w-2xl space-y-6">
+
+          <div className="flex items-center gap-4 border-b border-slate-100 pb-6">
+
+            <div className="w-16 h-16 rounded-2xl bg-emerald-600 text-white font-bold text-2xl flex items-center justify-center">
+              {user?.name ? user.name.charAt(0) : 'S'}
+            </div>
+
+            <div>
+
+              <h2 className="font-heading text-xl font-extrabold text-slate-900">
+                {user?.name || 'Seller'}
+              </h2>
+
+              <p className="text-xs text-slate-500">
+                {user?.email || 'seller@apexrealty.com'}
+              </p>
+
+              <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <ShieldCheck className="w-3 h-3" />
+                Verified Commercial Seller
+              </span>
+
+            </div>
+
+          </div>
+
+        </div>
+      )}
+
+      {/* =========================================================
+          FINALIZE SALE MODAL
+      ========================================================= */}
+      {showSellModal && (
+
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+
+          <div className="bg-white p-6 rounded-3xl max-w-md w-full border border-slate-200 shadow-2xl space-y-4 text-xs">
+
+            <h3 className="font-heading font-extrabold text-slate-900 text-base">
+              Finalize Sale Transaction
+            </h3>
+
+            <p className="text-slate-500">
+              Sell property directly to highest bidder or custom purchaser.
+            </p>
+
+            <form
+              onSubmit={handleFinalizeManualSale}
+              className="space-y-3"
+            >
+
+              {/* FIXED BUYER EMAIL */}
+              <div>
+
+                <label className="block font-bold text-slate-700 mb-1">
+                  Purchaser Email
+                </label>
+
+                <input
+                  type="email"
+                  required
+                  placeholder="buyer@example.com"
+                  value={selectedBuyerId}
+                  onChange={e =>
+                    setSelectedBuyerId(e.target.value)
+                  }
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
+                />
+
+              </div>
+
+              {/* FINAL PRICE */}
+              <div>
+
+                <label className="block font-bold text-slate-700 mb-1">
+                  Final Sale Amount (₹ Lakhs)
+                </label>
+
+                <input
+                  type="number"
+                  required
+                  min="0"
+                  step="0.1"
+                  value={customFinalPrice}
+                  onChange={e =>
+                    setCustomFinalPrice(e.target.value)
+                  }
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-emerald-700"
+                />
+
+              </div>
+
+              <div className="flex gap-2 pt-2">
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSellModal(false);
+                    setAuctionToSell(null);
+                    setSelectedBuyerId('');
+                    setCustomFinalPrice('');
+                  }}
+                  className="w-1/2 py-2 bg-slate-100 text-slate-700 font-bold rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={selling}
+                  className="w-1/2 py-2 bg-emerald-600 text-white font-bold rounded-xl shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  {selling ? 'Closing...' : 'Confirm Sale'}
+                </button>
+
+              </div>
+
+            </form>
+
+          </div>
+
+        </div>
+
+      )}
+
+    </DashboardLayout>
   );
 }

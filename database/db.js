@@ -6,8 +6,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Paths to ML datasets
-const PROPERTIES_FILE = path.join(__dirname, '../ml/dataset/current_properties.json');
-const HISTORICAL_FILE = path.join(__dirname, '../ml/dataset/historical_price_trends.json');
+const PROPERTIES_FILE = path.join(__dirname, '../../ml/datasets/current_properties.json');
+const HISTORICAL_FILE = path.join(__dirname, '../../ml/datasets/historical_price_trends.json');
 
 // In-Memory Data Store synced with JSON
 let propertiesData = [];
@@ -148,6 +148,26 @@ function saveProperties() {
     console.error('Error saving properties:', err);
   }
 }
+
+const normalizeId = (value) => String(value ?? '').trim().toLowerCase();
+
+const sameUser = (a, b) => normalizeId(a) !== '' && normalizeId(a) === normalizeId(b);
+
+const assertSellerOwnsAuction = (auction, sellerId) => {
+  if (!sellerId) return;
+  if (!sameUser(auction.seller_id, sellerId)) {
+    throw new Error('Access denied: this auction is owned by another seller.');
+  }
+};
+
+const findParticipantForBuyer = (auctionId, buyerId) => {
+  const normalized = normalizeId(buyerId);
+  return auctionParticipantsData.find(
+    p =>
+      p.auction_id === auctionId &&
+      (normalizeId(p.buyer_id) === normalized || normalizeId(p.buyer_email) === normalized)
+  );
+};
 
 export const db = {
   getProperties: () => propertiesData.filter(p => !p.isSold && p.status !== 'Sold'),
@@ -402,23 +422,103 @@ export const db = {
   },
 
   createAuction: (params) => {
-    const { property_id, seller_id, starting_price, minimum_increment, duration_hours, max_participants, auction_start } = params;
+    const {
+      property_id,
+      seller_id,
+      starting_price,
+      minimum_increment,
+      duration_hours,
+      max_participants,
+      auction_start
+    } = params;
+
+    const property = propertiesData.find(p => String(p.id) === String(property_id));
+    if (!property) throw new Error('Property not found.');
+    if (property.isSold || property.status === 'Sold') {
+      throw new Error('A sold property cannot be auctioned.');
+    }
+
+    // ----------------------------------------------------------
+    // SELLER OWNERSHIP FIX
+    // ----------------------------------------------------------
+    // The older property dataset stores ownership in different
+    // fields (sellerEmail / seller_id / sellerId / ownerEmail).
+    // The seller dashboard sends the logged-in seller as seller_id.
+    // Treat an explicit seller_id/owner field as authoritative.
+    // For legacy properties that only contain sellerEmail, bind the
+    // property to the current seller when an auction is created.
+    // This prevents the false "Access denied" error caused by old
+    // seed data while still protecting explicitly owned properties.
+    const seller = String(
+      seller_id ||
+      property.seller_id ||
+      property.sellerId ||
+      property.ownerEmail ||
+      property.owner_id ||
+      property.sellerEmail ||
+      'seller@apexrealty.com'
+    ).trim();
+
+    const explicitOwner =
+      property.seller_id ||
+      property.sellerId ||
+      property.ownerEmail ||
+      property.owner_id;
+
+    if (explicitOwner && !sameUser(explicitOwner, seller)) {
+      throw new Error(
+        'Access denied: you can only auction properties owned by your seller account.'
+      );
+    }
+
+    // Legacy records may only have sellerEmail. Once the current
+    // seller creates the auction, keep ownership consistent.
+    if (!explicitOwner || !sameUser(property.sellerEmail, seller)) {
+      property.sellerEmail = seller;
+      property.seller_id = seller;
+      saveProperties();
+    }
+
+    const startPrice = Number(starting_price);
+    const minIncrement = Number(minimum_increment ?? 1);
+    const duration = Number(duration_hours ?? 24);
+    const maxParticipants = Number(max_participants ?? 10);
+
+    if (!Number.isFinite(startPrice) || startPrice <= 0) {
+      throw new Error('Starting price must be greater than 0.');
+    }
+    if (!Number.isFinite(minIncrement) || minIncrement <= 0) {
+      throw new Error('Minimum increment must be greater than 0.');
+    }
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error('Auction duration must be greater than 0 hours.');
+    }
+    if (!Number.isFinite(maxParticipants) || maxParticipants < 1) {
+      throw new Error('Maximum participants must be at least 1.');
+    }
+
     const now = new Date();
-    const duration = parseFloat(duration_hours || 24);
-    const startTime = auction_start ? new Date(auction_start) : now;
+    const parsedStart = auction_start ? new Date(auction_start) : now;
+    const startTime = Number.isNaN(parsedStart.getTime()) ? now : parsedStart;
     const endTime = new Date(startTime.getTime() + duration * 60 * 60 * 1000);
-    
+
+    // Replace an older non-completed auction for the same property.
+    const existing = auctionsData.find(a => String(a.property_id) === String(property_id));
+    if (existing && !['COMPLETED', 'CLOSED', 'CANCELLED'].includes(existing.status)) {
+      throw new Error('This property already has an active auction.');
+    }
+
     const auctionId = `auc-${Date.now()}`;
     const newAuction = {
       auction_id: auctionId,
       property_id,
-      seller_id: seller_id || 'seller@apexrealty.com',
-      starting_price: parseFloat(starting_price),
-      minimum_increment: parseFloat(minimum_increment || 1),
+      seller_id: seller,
+      starting_price: startPrice,
+      minimum_increment: minIncrement,
       auction_start: startTime.toISOString(),
       auction_end: endTime.toISOString(),
       duration_hours: duration,
-      max_participants: max_participants ? parseInt(max_participants) : 10,
+      max_participants: Math.floor(maxParticipants),
       status: 'REGISTRATION_OPEN',
       winner_id: null,
       winner_name: null,
@@ -430,22 +530,20 @@ export const db = {
     auctionsData = auctionsData.filter(a => String(a.property_id) !== String(property_id));
     auctionsData.unshift(newAuction);
 
-    const prop = propertiesData.find(p => String(p.id) === String(property_id));
-    if (prop) {
-      prop.auctionEnabled = true;
-      prop.startingPrice = parseFloat(starting_price);
-      prop.minIncrement = parseFloat(minimum_increment || 1);
-      saveProperties();
-    }
+    property.auctionEnabled = true;
+    property.startingPrice = startPrice;
+    property.minIncrement = minIncrement;
+    property.auctionEnd = endTime.toISOString();
+    property.status = 'Available';
+    saveProperties();
 
-    // Send Notification to seller
     notificationsData.unshift({
       id: `notif-${Date.now()}`,
-      user_id: seller_id || 'seller@apexrealty.com',
+      user_id: seller,
       title: 'Auction Created & Registration Opened 📝',
       message: `Your property auction is created. Registration is open for buyer token requests.`,
       type: 'REGISTRATION_OPENED',
-      timestamp: new Date().toISOString(),
+      timestamp: now.toISOString(),
       read: false,
       auction_id: auctionId
     });
@@ -456,16 +554,46 @@ export const db = {
   // Token Registration Request from Buyer
   requestRegistration: (auctionId, buyerData) => {
     const { buyer_id, buyer_name, buyer_email, buyer_phone } = buyerData;
-    const auc = auctionsData.find(a => a.auction_id === auctionId || String(a.property_id) === String(auctionId));
-    if (!auc) throw new Error("Auction not found");
+    if (!buyer_id) throw new Error('buyer_id is required.');
+
+    const auc = auctionsData.find(a =>
+      a.auction_id === auctionId || String(a.property_id) === String(auctionId)
+    );
+    if (!auc) throw new Error('Auction not found.');
 
     if (auc.status !== 'REGISTRATION_OPEN') {
-      throw new Error("This auction is closed for registration.");
+      throw new Error('This auction is not open for registration.');
     }
 
-    let existingReg = auctionRegistrationsData.find(r => r.auction_id === auc.auction_id && r.buyer_id === buyer_id);
+    const participant = findParticipantForBuyer(auc.auction_id, buyer_id);
+    if (participant) {
+      const existingApproved = auctionRegistrationsData.find(
+        r => r.auction_id === auc.auction_id &&
+             r.buyer_id === participant.buyer_id &&
+             r.status === 'APPROVED'
+      );
+      if (existingApproved) return existingApproved;
+    }
+
+    const existingReg = auctionRegistrationsData.find(
+      r => r.auction_id === auc.auction_id &&
+           (sameUser(r.buyer_id, buyer_id) || sameUser(r.buyer_email, buyer_email || buyer_id))
+    );
     if (existingReg) {
+      if (existingReg.status === 'REJECTED') {
+        existingReg.status = 'PENDING';
+        existingReg.requested_at = new Date().toISOString();
+        existingReg.action_at = null;
+        return existingReg;
+      }
       return existingReg;
+    }
+
+    const approvedCount = auctionParticipantsData.filter(
+      p => p.auction_id === auc.auction_id
+    ).length;
+    if (approvedCount >= Number(auc.max_participants || 10)) {
+      throw new Error('This auction has reached its maximum number of authorized participants.');
     }
 
     const reg = {
@@ -475,21 +603,21 @@ export const db = {
       buyer_id,
       buyer_name: buyer_name || 'Buyer',
       buyer_email: buyer_email || buyer_id,
-      buyer_phone: buyer_phone || '+91 98765 00000',
+      buyer_phone: buyer_phone || '',
       status: 'PENDING',
       requested_at: new Date().toISOString(),
       approved_at: null,
+      action_at: null,
       token_id: null
     };
 
     auctionRegistrationsData.unshift(reg);
 
-    // Notify Seller
     notificationsData.unshift({
       id: `notif-reg-${Date.now()}`,
       user_id: auc.seller_id,
       title: 'New Token Registration Request 🎟️',
-      message: `${buyer_name || buyer_id} has requested an Auction Token to join property auction.`,
+      message: `${reg.buyer_name} has requested an Auction Token.`,
       type: 'REGISTRATION_REQUESTED',
       timestamp: new Date().toISOString(),
       read: false,
@@ -501,31 +629,47 @@ export const db = {
 
   // Approve / Reject Token Registration by Seller
   updateRegistrationStatus: (registrationId, status, sellerId) => {
+    const normalizedStatus = String(status || '').toUpperCase();
+    if (!['APPROVED', 'REJECTED'].includes(normalizedStatus)) {
+      throw new Error("status must be APPROVED or REJECTED.");
+    }
+
     const reg = auctionRegistrationsData.find(r => r.id === registrationId);
-    if (!reg) throw new Error("Registration request not found");
+    if (!reg) throw new Error('Registration request not found.');
 
     const auc = auctionsData.find(a => a.auction_id === reg.auction_id);
-    reg.status = status;
-    reg.action_at = new Date().toISOString();
+    if (!auc) throw new Error('Auction not found.');
 
-    if (status === 'APPROVED') {
-      const tokenId = `tok-${Date.now()}`;
-      reg.token_id = tokenId;
-      reg.approved_at = new Date().toISOString();
+    assertSellerOwnsAuction(auc, sellerId);
 
-      auctionTokensData.push({
-        token_id: tokenId,
-        auction_id: reg.auction_id,
-        buyer_id: reg.buyer_id,
-        issued_at: new Date().toISOString(),
-        status: 'ACTIVE'
-      });
+    if (auc.status !== 'REGISTRATION_OPEN') {
+      throw new Error('Registration changes are only allowed while registration is open.');
+    }
 
-      let participant = auctionParticipantsData.find(p => p.auction_id === reg.auction_id && p.buyer_id === reg.buyer_id);
-      if (!participant) {
+    if (normalizedStatus === 'APPROVED') {
+      if (reg.status === 'APPROVED') return reg;
+
+      const existingParticipant = findParticipantForBuyer(auc.auction_id, reg.buyer_id);
+      if (!existingParticipant) {
+        const approvedCount = auctionParticipantsData.filter(
+          p => p.auction_id === auc.auction_id
+        ).length;
+        if (approvedCount >= Number(auc.max_participants || 10)) {
+          throw new Error('Maximum authorized participant limit reached.');
+        }
+
+        const tokenId = `tok-${Date.now()}`;
+        auctionTokensData.push({
+          token_id: tokenId,
+          auction_id: auc.auction_id,
+          buyer_id: reg.buyer_id,
+          issued_at: new Date().toISOString(),
+          status: 'ACTIVE'
+        });
+
         auctionParticipantsData.push({
           participant_id: `part-${Date.now()}`,
-          auction_id: reg.auction_id,
+          auction_id: auc.auction_id,
           buyer_id: reg.buyer_id,
           buyer_name: reg.buyer_name,
           buyer_email: reg.buyer_email,
@@ -533,29 +677,43 @@ export const db = {
           token_id: tokenId,
           joined_at: new Date().toISOString()
         });
+
+        reg.token_id = tokenId;
+      } else {
+        reg.token_id = existingParticipant.token_id;
       }
 
-      // Send Notification to Buyer
+      reg.status = 'APPROVED';
+      reg.approved_at = new Date().toISOString();
+      reg.action_at = new Date().toISOString();
+
       notificationsData.unshift({
         id: `notif-app-${Date.now()}`,
         user_id: reg.buyer_id,
         title: 'Registration Approved! 🎟️',
-        message: `You received an Auction Token and are now an Authorized Auction Participant!`,
+        message: 'You received an Auction Token and are now an authorized auction participant.',
         type: 'REGISTRATION_APPROVED',
         timestamp: new Date().toISOString(),
         read: false,
-        auction_id: reg.auction_id
+        auction_id: auc.auction_id
       });
-    } else if (status === 'REJECTED') {
+    } else {
+      // Rejection never destroys an existing token/participant.
+      if (reg.status === 'APPROVED') {
+        throw new Error('An already approved registration cannot be rejected.');
+      }
+      reg.status = 'REJECTED';
+      reg.action_at = new Date().toISOString();
+
       notificationsData.unshift({
         id: `notif-rej-${Date.now()}`,
         user_id: reg.buyer_id,
         title: 'Registration Update',
-        message: `Your registration request for property auction was declined by the seller.`,
+        message: 'Your registration request for this property auction was declined by the seller.',
         type: 'REGISTRATION_REJECTED',
         timestamp: new Date().toISOString(),
         read: false,
-        auction_id: reg.auction_id
+        auction_id: auc.auction_id
       });
     }
 
@@ -564,59 +722,88 @@ export const db = {
 
   // Seller Auction Controls (Start Registration, Stop Registration, Start Live, Pause, Resume, Freeze, End, Close)
   updateAuctionStatus: (auctionId, newStatus, sellerId) => {
-    const auc = auctionsData.find(a => a.auction_id === auctionId || String(a.property_id) === String(auctionId));
-    if (!auc) throw new Error("Auction not found");
+    const allowed = [
+      'REGISTRATION_OPEN',
+      'REGISTRATION_CLOSED',
+      'LIVE',
+      'PAUSED',
+      'FROZEN',
+      'ENDED',
+      'CLOSED'
+    ];
+    const status = String(newStatus || '').toUpperCase();
+    if (!allowed.includes(status)) throw new Error('Invalid auction status.');
 
-    const oldStatus = auc.status;
-    auc.status = newStatus;
+    const auc = auctionsData.find(a =>
+      a.auction_id === auctionId || String(a.property_id) === String(auctionId)
+    );
+    if (!auc) throw new Error('Auction not found.');
+    assertSellerOwnsAuction(auc, sellerId);
 
-    const participants = auctionParticipantsData.filter(p => p.auction_id === auc.auction_id);
-
-    // Trigger Notification depending on control action
-    let notifTitle = '';
-    let notifMsg = '';
-    let notifType = newStatus;
-
-    if (newStatus === 'REGISTRATION_OPEN') {
-      notifTitle = 'Registration Opened 📝';
-      notifMsg = 'Registration is now open for buyers to request Auction Tokens.';
-    } else if (newStatus === 'REGISTRATION_CLOSED') {
-      notifTitle = 'Registration Closed 🔒';
-      notifMsg = 'Registration has been closed by the seller. No additional Auction Tokens will be issued.';
-    } else if (newStatus === 'LIVE') {
-      notifTitle = 'Live Auction Started! ⚡';
-      notifMsg = 'The live property auction has officially started. You may now place your bids in real time!';
-      auc.auction_start = new Date().toISOString();
-    } else if (newStatus === 'PAUSED') {
-      notifTitle = 'Auction Paused ⏸️';
-      notifMsg = 'The seller has temporarily paused live bidding.';
-    } else if (newStatus === 'FROZEN') {
-      notifTitle = 'Bidding Frozen 🧊';
-      notifMsg = 'Bidding is now frozen. No further bids can be placed while the seller reviews offers.';
-    } else if (newStatus === 'ENDED' || newStatus === 'CLOSED') {
-      notifTitle = 'Auction Ended 🏁';
-      notifMsg = 'The auction bidding session has ended.';
+    if (['COMPLETED', 'CLOSED', 'CANCELLED'].includes(auc.status)) {
+      throw new Error(`Auction is already ${auc.status.toLowerCase()} and cannot be changed.`);
     }
 
-    if (notifTitle) {
+    const transitions = {
+      // Starting Live from an open registration is intentionally allowed.
+      // The seller dashboard exposes both actions, and clicking Start Live
+      // should not fail merely because registration is still open. Once the
+      // auction becomes LIVE, new registrations are no longer accepted by
+      // the registration endpoint.
+      REGISTRATION_OPEN: ['REGISTRATION_CLOSED', 'LIVE', 'CLOSED'],
+      REGISTRATION_CLOSED: ['LIVE', 'REGISTRATION_OPEN', 'CLOSED'],
+      LIVE: ['PAUSED', 'FROZEN', 'ENDED', 'CLOSED'],
+      PAUSED: ['LIVE', 'FROZEN', 'ENDED', 'CLOSED'],
+      FROZEN: ['LIVE', 'ENDED', 'CLOSED'],
+      ENDED: ['CLOSED']
+    };
+
+    if (auc.status !== status && !(transitions[auc.status] || []).includes(status)) {
+      throw new Error(`Cannot change auction status from ${auc.status} to ${status}.`);
+    }
+
+    const oldStatus = auc.status;
+    auc.status = status;
+    if (status === 'LIVE') {
+      const now = new Date();
+      auc.auction_start = now.toISOString();
+      const remaining = Math.max(
+        60 * 60 * 1000,
+        new Date(auc.auction_end).getTime() - now.getTime()
+      );
+      auc.auction_end = new Date(now.getTime() + remaining).toISOString();
+    }
+
+    const participants = auctionParticipantsData.filter(p => p.auction_id === auc.auction_id);
+    const messages = {
+      REGISTRATION_OPEN: ['Registration Opened 📝', 'Registration is now open for buyer token requests.'],
+      REGISTRATION_CLOSED: ['Registration Closed 🔒', 'Registration has been closed. No new token requests can be submitted.'],
+      LIVE: ['Live Auction Started! ⚡', 'The live auction has started. Authorized token holders may bid now.'],
+      PAUSED: ['Auction Paused ⏸️', 'The seller has temporarily paused live bidding.'],
+      FROZEN: ['Bidding Frozen 🧊', 'Bidding is frozen while the seller reviews offers.'],
+      ENDED: ['Auction Ended 🏁', 'The seller has ended the bidding session.'],
+      CLOSED: ['Auction Closed 🔒', 'The seller has closed this auction.']
+    };
+
+    const [notifTitle, notifMsg] = messages[status] || [];
+    if (notifTitle && status !== oldStatus) {
       participants.forEach((p, idx) => {
         notificationsData.unshift({
           id: `notif-st-${Date.now()}-${idx}`,
           user_id: p.buyer_id,
           title: notifTitle,
           message: notifMsg,
-          type: notifType,
+          type: status,
           timestamp: new Date().toISOString(),
           read: false,
           auction_id: auc.auction_id
         });
       });
-
       notificationsData.unshift({
         id: `notif-seller-st-${Date.now()}`,
         user_id: auc.seller_id,
-        title: `Auction Status: ${newStatus}`,
-        message: `You updated auction status from ${oldStatus} to ${newStatus}.`,
+        title: `Auction Status: ${status}`,
+        message: `You changed the auction status from ${oldStatus} to ${status}.`,
         type: 'SELLER_ACTION',
         timestamp: new Date().toISOString(),
         read: false,
@@ -629,72 +816,91 @@ export const db = {
 
   // Place Bid (Restricted strictly to Token-Holding Authorized Participants)
   placeAuctionBid: (auctionId, buyerId, buyerName, bidAmount) => {
-    const auc = auctionsData.find(a => a.auction_id === auctionId || String(a.property_id) === String(auctionId));
-    if (!auc) throw new Error("Auction not found");
+    const auc = auctionsData.find(a =>
+      a.auction_id === auctionId || String(a.property_id) === String(auctionId)
+    );
+    if (!auc) throw new Error('Auction not found.');
 
-    if (auc.status !== 'LIVE') {
-      if (auc.status === 'FROZEN') {
-        throw new Error("Bidding is frozen by seller. No additional bids can be placed.");
-      } else if (auc.status === 'PAUSED') {
-        throw new Error("Auction is currently paused by the seller.");
-      } else if (auc.status === 'REGISTRATION_OPEN' || auc.status === 'REGISTRATION_CLOSED') {
-        throw new Error("Live auction has not started yet.");
-      } else {
-        throw new Error("Auction is not live.");
-      }
+    // Prevent bidding after the scheduled end time even if nobody manually ends it.
+    if (auc.status === 'LIVE' && auc.auction_end && new Date(auc.auction_end).getTime() <= Date.now()) {
+      auc.status = 'ENDED';
     }
 
-    // CHECK AUTHORIZED TOKEN PARTICIPANT
-    const isAuthorized = auctionParticipantsData.some(p => p.auction_id === auc.auction_id && p.buyer_id === buyerId);
-    const hasToken = auctionTokensData.some(t => t.auction_id === auc.auction_id && t.buyer_id === buyerId && t.status === 'ACTIVE');
+    if (auc.status !== 'LIVE') {
+      if (auc.status === 'FROZEN') throw new Error('Bidding is frozen by seller. No additional bids can be placed.');
+      if (auc.status === 'PAUSED') throw new Error('Auction is currently paused by the seller.');
+      if (auc.status === 'REGISTRATION_OPEN' || auc.status === 'REGISTRATION_CLOSED') {
+        throw new Error('Live auction has not started yet.');
+      }
+      if (auc.status === 'ENDED' || auc.status === 'CLOSED') throw new Error('Auction bidding has ended.');
+      throw new Error('Auction is not live.');
+    }
 
-    if (!isAuthorized && !hasToken) {
-      throw new Error("Access Denied: Only Authorized Auction Participants with an Auction Token can place bids.");
+    const participant = findParticipantForBuyer(auc.auction_id, buyerId);
+    if (!participant) {
+      throw new Error('Access denied: only authorized Auction Token holders can place bids.');
+    }
+
+    const token = auctionTokensData.find(
+      t => t.auction_id === auc.auction_id &&
+           t.status === 'ACTIVE' &&
+           t.token_id === participant.token_id
+    );
+    if (!token) {
+      throw new Error('Access denied: your Auction Token is not active.');
+    }
+
+    const amount = Number(bidAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error('Bid amount must be a valid positive number.');
     }
 
     const bids = auctionBidsData.filter(b => b.auction_id === auc.auction_id);
-    const amount = parseFloat(bidAmount);
-    const minInc = auc.minimum_increment || 1;
+    const currentHighest = bids.length
+      ? Math.max(...bids.map(b => Number(b.bid_amount)))
+      : Number(auc.starting_price);
+    const requiredMinimum = bids.length
+      ? currentHighest + Number(auc.minimum_increment || 1)
+      : Number(auc.starting_price);
 
-    if (bids.length === 0) {
-      if (amount < auc.starting_price) {
-        throw new Error(`Bid amount must be at least the starting price of ₹${auc.starting_price} Lakhs.`);
-      }
-    } else {
-      const currentHighest = Math.max(...bids.map(b => b.bid_amount));
-      if (amount < currentHighest + minInc) {
-        throw new Error(`Bid must be at least ₹${currentHighest + minInc} Lakhs (Current highest: ₹${currentHighest} Lakhs + Min increment: ₹${minInc} Lakhs).`);
-      }
+    if (amount < requiredMinimum) {
+      throw new Error(
+        `Bid must be at least ₹${requiredMinimum} Lakhs (current highest/starting price plus minimum increment).`
+      );
     }
 
-    const previousHighestBidder = bids.length > 0 ? [...bids].sort((a, b) => b.bid_amount - a.bid_amount)[0] : null;
+    const canonicalBuyerId = participant.buyer_id;
+    const previousHighestBidder = bids.length
+      ? [...bids].sort((a, b) => Number(b.bid_amount) - Number(a.bid_amount))[0]
+      : null;
 
     const newBid = {
       bid_id: `bid-${Date.now()}`,
       auction_id: auc.auction_id,
       property_id: auc.property_id,
-      buyer_id: buyerId,
-      bidder_name: buyerName || 'Authorized Investor',
+      buyer_id: canonicalBuyerId,
+      bidder_name: participant.buyer_name || buyerName || 'Authorized Buyer',
       bid_amount: amount,
       bid_time: new Date().toISOString()
     };
+
     auctionBidsData.unshift(newBid);
 
     db.addBid(auc.property_id, {
       id: newBid.bid_id,
-      bidder: buyerName || 'Authorized Investor',
-      email: buyerId,
-      amount: amount,
+      bidder: newBid.bidder_name,
+      email: participant.buyer_email || canonicalBuyerId,
+      amount,
       status: 'ACTIVE',
       timestamp: newBid.bid_time
     });
 
-    if (previousHighestBidder && previousHighestBidder.buyer_id !== buyerId) {
+    if (previousHighestBidder && previousHighestBidder.buyer_id !== canonicalBuyerId) {
       notificationsData.unshift({
         id: `notif-outbid-${Date.now()}`,
         user_id: previousHighestBidder.buyer_id,
         title: 'Outbid Alert! ⚠️',
-        message: `You have been outbid! New highest bid is ₹${amount} Lakhs by ${buyerName || 'a competing investor'}.`,
+        message: `You have been outbid. The new highest bid is ₹${amount} Lakhs.`,
         type: 'OUTBID',
         timestamp: new Date().toISOString(),
         read: false,
@@ -706,7 +912,7 @@ export const db = {
       id: `notif-seller-bid-${Date.now()}`,
       user_id: auc.seller_id,
       title: 'New Bid Placed 🏷️',
-      message: `A bid of ₹${amount} Lakhs was placed by ${buyerName || buyerId}.`,
+      message: `A bid of ₹${amount} Lakhs was placed by ${newBid.bidder_name}.`,
       type: 'BID_PLACED',
       timestamp: new Date().toISOString(),
       read: false,
@@ -718,81 +924,120 @@ export const db = {
 
   // Seller Decision & Final Sale ("Sell Property")
   sellProperty: (auctionId, selectedBuyerId, finalPrice, sellerId) => {
-    const auc = auctionsData.find(a => a.auction_id === auctionId || String(a.property_id) === String(auctionId));
-    if (!auc) throw new Error("Auction not found");
+    const auc = auctionsData.find(a =>
+      a.auction_id === auctionId || String(a.property_id) === String(auctionId)
+    );
+    if (!auc) throw new Error('Auction not found.');
+    assertSellerOwnsAuction(auc, sellerId);
+
+    if (auc.status === 'COMPLETED') {
+      throw new Error('This auction has already been completed.');
+    }
+    if (auc.status === 'CANCELLED' || auc.status === 'CLOSED') {
+      throw new Error('A closed auction cannot be sold.');
+    }
 
     const property = propertiesData.find(p => String(p.id) === String(auc.property_id));
-    if (!property) throw new Error("Property not found");
+    if (!property) throw new Error('Property not found.');
+
+    const participant = findParticipantForBuyer(auc.auction_id, selectedBuyerId);
+    if (!participant) {
+      throw new Error('Selected buyer is not an authorized participant in this auction.');
+    }
 
     const bids = auctionBidsData.filter(b => b.auction_id === auc.auction_id);
-    const participants = auctionParticipantsData.filter(p => p.auction_id === auc.auction_id);
-    const selectedParticipant = participants.find(p => p.buyer_id === selectedBuyerId) || { buyer_name: selectedBuyerId, buyer_email: selectedBuyerId };
-    
-    const salePrice = parseFloat(finalPrice || (bids.length > 0 ? Math.max(...bids.map(b => b.bid_amount)) : auc.starting_price));
+    const highestBid = bids.length
+      ? Math.max(...bids.map(b => Number(b.bid_amount)))
+      : Number(auc.starting_price);
 
+    const salePrice = Number(finalPrice || highestBid);
+    if (!Number.isFinite(salePrice) || salePrice <= 0) {
+      throw new Error('Final selling price must be a valid positive number.');
+    }
+    if (bids.length && salePrice < highestBid) {
+      throw new Error(`Final selling price cannot be below the current highest bid of ₹${highestBid} Lakhs.`);
+    }
+
+    const now = new Date().toISOString();
     auc.status = 'COMPLETED';
-    auc.winner_id = selectedBuyerId;
-    auc.winner_name = selectedParticipant.buyer_name || selectedBuyerId;
+    auc.winner_id = participant.buyer_id;
+    auc.winner_name = participant.buyer_name || selectedBuyerId;
     auc.winning_bid = salePrice;
-    auc.completed_at = new Date().toISOString();
+    auc.completed_at = now;
 
-    // Mark Property as SOLD and remove from active listings
     property.isSold = true;
     property.status = 'Sold';
     property.auctionEnabled = false;
-    property.soldTo = selectedBuyerId;
+    property.soldTo = participant.buyer_id;
     property.soldPrice = salePrice;
+    property.auctionEnd = now;
     saveProperties();
 
-    // Create Property Sales Record
+    // Deactivate every token after the transaction is finalized.
+    auctionTokensData
+      .filter(t => t.auction_id === auc.auction_id)
+      .forEach(t => { t.status = 'USED'; });
+
     const saleRecord = {
       sale_id: `sale-${Date.now()}`,
       auction_id: auc.auction_id,
       property_id: property.id,
-      property_title: property.title,
-      property_location: property.location,
+      property_title: property.name || property.title || 'Property',
+      property_location: `${property.locality || ''}${property.locality ? ', ' : ''}${property.city || property.location || ''}`,
       property_image: property.image,
       final_selling_price: salePrice,
-      buyer_id: selectedBuyerId,
-      buyer_name: selectedParticipant.buyer_name || selectedBuyerId,
-      buyer_email: selectedParticipant.buyer_email || selectedBuyerId,
-      seller_id: auc.seller_id || property.sellerEmail || 'seller@apexrealty.com',
-      seller_name: property.sellerName || 'Apex Premium Properties',
+      buyer_id: participant.buyer_id,
+      buyer_name: participant.buyer_name || participant.buyer_id,
+      buyer_email: participant.buyer_email || participant.buyer_id,
+      seller_id: auc.seller_id,
+      seller_name: property.sellerName || property.seller || 'Property Seller',
+      seller_email: auc.seller_id,
       auction_duration: `${auc.duration_hours || 24} Hours`,
-      total_participants: participants.length,
+      total_participants: auctionParticipantsData.filter(p => p.auction_id === auc.auction_id).length,
+      total_bids_placed: bids.length,
       total_bids: bids.length,
-      sold_at: new Date().toISOString()
+      sold_at: now
     };
 
-    propertySalesData.unshift(saleRecord);
+    // Avoid duplicate sale records if this method is retried.
+    const existingSaleIndex = propertySalesData.findIndex(s => s.auction_id === auc.auction_id);
+    if (existingSaleIndex >= 0) {
+      propertySalesData[existingSaleIndex] = saleRecord;
+    } else {
+      propertySalesData.unshift(saleRecord);
+    }
 
-    // Notify Buyer
     notificationsData.unshift({
       id: `notif-sold-win-${Date.now()}`,
-      user_id: selectedBuyerId,
+      user_id: participant.buyer_id,
       title: 'Property Deal Finalized! 🏠🎉',
-      message: `Congratulations! The seller has chosen you to buy ${property.title} for ₹${salePrice} Lakhs!`,
+      message: `Congratulations! The seller selected you to buy ${property.name || 'the property'} for ₹${salePrice} Lakhs.`,
       type: 'PROPERTY_SOLD',
-      timestamp: new Date().toISOString(),
+      timestamp: now,
       read: false,
       auction_id: auc.auction_id
     });
 
-    // Notify other participants
-    participants.filter(p => p.buyer_id !== selectedBuyerId).forEach((p, idx) => {
-      notificationsData.unshift({
-        id: `notif-sold-loss-${Date.now()}-${idx}`,
-        user_id: p.buyer_id,
-        title: 'Auction Concluded',
-        message: `The property ${property.title} has been sold by the seller.`,
-        type: 'AUCTION_LOST',
-        timestamp: new Date().toISOString(),
-        read: false,
-        auction_id: auc.auction_id
+    auctionParticipantsData
+      .filter(p => p.auction_id === auc.auction_id && !sameUser(p.buyer_id, participant.buyer_id))
+      .forEach((p, idx) => {
+        notificationsData.unshift({
+          id: `notif-sold-loss-${Date.now()}-${idx}`,
+          user_id: p.buyer_id,
+          title: 'Auction Concluded',
+          message: `The property ${property.name || 'property'} has been sold by the seller.`,
+          type: 'AUCTION_LOST',
+          timestamp: now,
+          read: false,
+          auction_id: auc.auction_id
+        });
       });
-    });
 
-    return { message: "Property successfully marked as SOLD!", saleRecord, auction: db.getAuctionById(auc.auction_id) };
+    return {
+      message: 'Property successfully marked as SOLD!',
+      saleRecord,
+      auction: db.getAuctionById(auc.auction_id)
+    };
   },
 
   getNotifications: (userId) => {
