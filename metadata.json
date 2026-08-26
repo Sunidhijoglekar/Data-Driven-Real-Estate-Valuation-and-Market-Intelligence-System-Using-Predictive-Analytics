@@ -1,0 +1,6 @@
+{
+  "name": "Real Estate Valuation and Market Intelligence System",
+  "description": "Data-Driven Real Estate Valuation and Market Intelligence System using predictive analytics, machine learning, time-series forecasting, and Gemini AI insights.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

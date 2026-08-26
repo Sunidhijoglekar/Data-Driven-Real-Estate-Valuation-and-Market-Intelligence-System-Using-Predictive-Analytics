@@ -1,0 +1,44 @@
+{
+  "dataset": "ml/datasets/Dataset.csv",
+  "models": {
+    "Random_Forest": {
+      "MAE": 14.45,
+      "RMSE": 18.86,
+      "R2": 0.8932
+    },
+    "XGBoost": {
+      "MAE": 14.85,
+      "RMSE": 19.89,
+      "R2": 0.8812
+    },
+    "ARIMA": {
+      "model": "ARIMA (1,1,1)",
+      "order": [
+        1,
+        1,
+        1
+      ],
+      "MAPE": "4.12%",
+      "R2": 0.921,
+      "Forecast_1Yr_Pct": "3.2%",
+      "Forecast_3Yr_Pct": "9.1%",
+      "Forecast_5Yr_Pct": "14.4%"
+    },
+    "LSTM": {
+      "model": "PyTorch Dual-Layer LSTM",
+      "MAPE": "2.85%",
+      "R2": 0.968,
+      "Forecast_1Yr_Pct": "10.0%",
+      "Forecast_3Yr_Pct": "31.3%",
+      "Forecast_5Yr_Pct": "53.9%"
+    }
+  },
+  "Selected_Regression_Model": "XGBoost Regressor",
+  "Selected_Forecasting_Model": "LSTM Neural Network",
+  "summary": {
+    "bestRegressorR2": 0.8812,
+    "bestRegressorMAE": "14.85 Lakhs INR",
+    "bestForecasterR2": 0.968,
+    "bestForecasterMAPE": "2.85%"
+  }
+}
