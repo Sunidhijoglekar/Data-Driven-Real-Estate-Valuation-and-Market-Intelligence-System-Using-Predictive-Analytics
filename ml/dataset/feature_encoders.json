@@ -1,0 +1,74 @@
+{
+  "Property_Type": {
+    "1 BHK Flat": 0,
+    "2 BHK Flat": 1,
+    "3 BHK Flat": 2,
+    "4 BHK Flat": 3,
+    "5 BHK Villa": 4
+  },
+  "Locality": {
+    "BTM Layout": 0,
+    "Banashankari": 1,
+    "Bellandur": 2,
+    "C V Raman Nagar": 3,
+    "Electronic City": 4,
+    "HSR Layout": 5,
+    "Hebbal": 6,
+    "Indiranagar": 7,
+    "JP Nagar": 8,
+    "Jayanagar": 9,
+    "Kaggadasapura": 10,
+    "Koramangala": 11,
+    "Malleshwaram": 12,
+    "Marathahalli": 13,
+    "Rajajinagar": 14,
+    "Sarjapur Road": 15,
+    "Thanisandra": 16,
+    "Varthur": 17,
+    "Whitefield": 18,
+    "Yelahanka": 19
+  },
+  "City": {
+    "Bangalore": 0
+  },
+  "Zone": {
+    "Central": 0,
+    "East": 1,
+    "North": 2,
+    "South": 3,
+    "West": 4
+  },
+  "Builder_Owner": {
+    "Aparna Constructions": 0,
+    "Brigade Group": 1,
+    "Casagrand": 2,
+    "DLF Limited": 3,
+    "Godrej Properties": 4,
+    "Hiranandani Group": 5,
+    "Kolte-Patil": 6,
+    "Lodha Group": 7,
+    "Mahindra Lifespaces": 8,
+    "Oberoi Realty": 9,
+    "Piramal Realty": 10,
+    "Prestige Group": 11,
+    "Puravankara": 12,
+    "Rustomjee": 13,
+    "Sobha Limited": 14,
+    "Tata Housing": 15
+  },
+  "Construction_Status": {
+    "Ready To Move": 0,
+    "Under Construction": 1
+  },
+  "Facing": {
+    "East": 0,
+    "North": 1,
+    "North-East": 2,
+    "West": 3
+  },
+  "Furnishing": {
+    "Fully-Furnished": 0,
+    "Semi-Furnished": 1,
+    "Unfurnished": 2
+  }
+}
