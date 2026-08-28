@@ -126,6 +126,14 @@
     "auctionEnd": null,
     "bids": [
       {
+        "id": "bid-1787933637711",
+        "bidder": "BUYER",
+        "email": "buyer@example.com",
+        "amount": 140,
+        "status": "ACTIVE",
+        "timestamp": "2026-08-28T16:13:57.711Z"
+      },
+      {
         "id": "bid-1787736395610",
         "bidder": "Sunidhi Joglekar",
         "email": "sunidhijoglekar005@gmail.com",
@@ -208,9 +216,9 @@
     "lat": 12.978656000402994,
     "lng": 77.54510037516998,
     "sellerEmail": "seller4@apexrealty.com",
-    "auctionEnabled": true,
-    "startingPrice": 100,
-    "minIncrement": 2,
+    "auctionEnabled": false,
+    "startingPrice": 179.8,
+    "minIncrement": 1,
     "auctionEnd": null,
     "bids": [
       {
@@ -221,7 +229,11 @@
         "status": "ACTIVE",
         "timestamp": "2026-08-26T09:26:21.133Z"
       }
-    ]
+    ],
+    "isSold": true,
+    "status": "Sold",
+    "soldTo": "buyer@example.com",
+    "soldPrice": 179.8
   },
   {
     "id": "prop-4",
