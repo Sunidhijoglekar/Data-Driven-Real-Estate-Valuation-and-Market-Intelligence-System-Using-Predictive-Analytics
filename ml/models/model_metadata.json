@@ -1,0 +1,40 @@
+{
+  "dataset": "ml/datasets/Dataset.csv",
+  "models": {
+    "Random_Forest": {
+      "Algorithm": "Random Forest Regressor",
+      "R2": 0.9412,
+      "MAE": 4.15,
+      "MSE": 31.8,
+      "RMSE": 5.64
+    },
+    "XGBoost": {
+      "Algorithm": "XGBoost Regressor",
+      "R2": 0.9635,
+      "MAE": 2.85,
+      "MSE": 18.4,
+      "RMSE": 4.29
+    },
+    "ARIMA": {
+      "Algorithm": "ARIMA Time Series Forecaster",
+      "Order": "(2, 1, 2)",
+      "AIC": 142.3,
+      "MAPE": "4.12%"
+    },
+    "LSTM": {
+      "Algorithm": "LSTM Recurrent Neural Network",
+      "Layers": 2,
+      "Hidden_Units": 64,
+      "R2": 0.9780,
+      "MAPE": "2.85%"
+    }
+  },
+  "Selected_Regression_Model": "XGBoost Regressor",
+  "Selected_Forecasting_Model": "LSTM Neural Network",
+  "summary": {
+    "bestRegressorR2": 0.9635,
+    "bestRegressorMAE": "2.85 Lakhs INR",
+    "bestForecasterR2": 0.9780,
+    "bestForecasterMAPE": "2.85%"
+  }
+}
