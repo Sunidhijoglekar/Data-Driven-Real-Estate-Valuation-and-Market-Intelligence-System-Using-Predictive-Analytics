@@ -120,7 +120,7 @@
     "lat": 13.017064871341285,
     "lng": 77.57379265817264,
     "sellerEmail": "seller3@apexrealty.com",
-    "auctionEnabled": true,
+    "auctionEnabled": false,
     "startingPrice": 138.5,
     "minIncrement": 1,
     "auctionEnd": null,
@@ -173,7 +173,11 @@
         "status": "ACTIVE",
         "timestamp": "2026-08-26T09:26:21.011Z"
       }
-    ]
+    ],
+    "isSold": true,
+    "status": "Sold",
+    "soldTo": "buyer@example.com",
+    "soldPrice": 252.5
   },
   {
     "id": "prop-3",
@@ -350,10 +354,39 @@
     "lng": 77.60878310927316,
     "sellerEmail": "seller2@apexrealty.com",
     "auctionEnabled": false,
-    "startingPrice": 32,
+    "startingPrice": 37.7,
     "minIncrement": 1,
     "auctionEnd": null,
-    "bids": []
+    "bids": [
+      {
+        "id": "bid-1788526313285",
+        "bidder": "BUYER",
+        "email": "buyer@example.com",
+        "amount": 50.2,
+        "status": "ACTIVE",
+        "timestamp": "2026-09-04T12:51:53.285Z"
+      },
+      {
+        "id": "bid-1788526298106",
+        "bidder": "BUYER",
+        "email": "buyer@example.com",
+        "amount": 42.7,
+        "status": "ACTIVE",
+        "timestamp": "2026-09-04T12:51:38.106Z"
+      },
+      {
+        "id": "bid-1788526290058",
+        "bidder": "BUYER",
+        "email": "buyer@example.com",
+        "amount": 41.7,
+        "status": "ACTIVE",
+        "timestamp": "2026-09-04T12:51:30.058Z"
+      }
+    ],
+    "isSold": true,
+    "status": "Sold",
+    "soldTo": "buyer@example.com",
+    "soldPrice": 50.2
   },
   {
     "id": "prop-6",
@@ -405,11 +438,15 @@
     "lat": 12.957629225090054,
     "lng": 77.64260851433252,
     "sellerEmail": "seller3@apexrealty.com",
-    "auctionEnabled": true,
+    "auctionEnabled": false,
     "startingPrice": 81.9,
     "minIncrement": 1,
     "auctionEnd": null,
-    "bids": []
+    "bids": [],
+    "isSold": true,
+    "status": "Sold",
+    "soldTo": "buyer@example.com",
+    "soldPrice": 81.9
   },
   {
     "id": "prop-7",
@@ -524,7 +561,16 @@
     "startingPrice": 127.2,
     "minIncrement": 1,
     "auctionEnd": "2026-08-15T15:50:51.712Z",
-    "bids": []
+    "bids": [
+      {
+        "id": "bid-1788526366993",
+        "bidder": "BUYER",
+        "email": "buyer@example.com",
+        "amount": 128.2,
+        "status": "ACTIVE",
+        "timestamp": "2026-09-04T12:52:46.993Z"
+      }
+    ]
   },
   {
     "id": "prop-9",
