@@ -975,6 +975,10 @@ export default function SellerDashboard({ user, onLogout }) {
                       ? 'bg-amber-50/80 border-amber-200'
                       : notif.type === 'SELLER_APPROVED_BIDDER'
                       ? 'bg-emerald-50/70 border-emerald-200'
+                      : notif.type === 'BID_PLACED'
+                      ? 'bg-blue-50/80 border-blue-200'
+                      : notif.type === 'OUTBID'
+                      ? 'bg-rose-50/80 border-rose-200'
                       : 'bg-slate-50 border-slate-200'
                   }`}
                 >
@@ -983,6 +987,8 @@ export default function SellerDashboard({ user, onLogout }) {
                       {notif.type === 'REGISTRATION_REQUESTED' && <Ticket className="w-4 h-4 text-amber-600 shrink-0" />}
                       {notif.type === 'SELLER_APPROVED_BIDDER' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
                       {notif.type === 'AUCTION_CREATED' && <Gavel className="w-4 h-4 text-blue-600 shrink-0" />}
+                      {notif.type === 'BID_PLACED' && <TrendingUp className="w-4 h-4 text-blue-600 shrink-0" />}
+                      {notif.type === 'OUTBID' && <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
                       <span className="font-extrabold text-slate-900 text-sm">
                         {notif.title}
                       </span>
