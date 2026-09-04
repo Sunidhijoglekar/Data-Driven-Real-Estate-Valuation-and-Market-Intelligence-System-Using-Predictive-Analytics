@@ -7,11 +7,13 @@ import {
 } from 'lucide-react';
 import GoogleMapComponent from '../components/GoogleMapComponent';
 import PropertyCard from '../components/PropertyCard';
+import PropertyMarketGrowthChart from '../components/PropertyMarketGrowthChart';
 
 export default function PropertyDetail({ user }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const [property, setProperty] = useState(null);
+  const [valuation, setValuation] = useState(null);
   const [similarProperties, setSimilarProperties] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -22,6 +24,11 @@ export default function PropertyDetail({ user }) {
       try {
         const data = await apiService.getPropertyById(id);
         setProperty(data);
+
+        // Asynchronously fetch ML valuation & market growth
+        apiService.predictValuation(data)
+          .then(res => setValuation(res))
+          .catch(err => console.warn('Valuation notice:', err.message));
 
         // Fetch all properties to find similar properties
         const res = await apiService.getProperties();
@@ -243,6 +250,9 @@ export default function PropertyDetail({ user }) {
           {/* Embedded Google Maps */}
           <GoogleMapComponent property={property} />
 
+          {/* Year-by-Year Property Market Appreciation Graph */}
+          <PropertyMarketGrowthChart property={property} valuation={valuation} />
+
         </div>
 
         {/* Right Column (Seller & Action Sidebars) */}
@@ -275,7 +285,7 @@ export default function PropertyDetail({ user }) {
                   className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs rounded-xl shadow-md transition-colors flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Gavel className="w-4 h-4" />
-                  Start Bidding
+                  Request Access / Join Live Auction
                 </button>
               )}
             </div>

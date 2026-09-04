@@ -126,6 +126,14 @@
     "auctionEnd": null,
     "bids": [
       {
+        "id": "bid-1788522662542",
+        "bidder": "BUYER",
+        "email": "buyer@example.com",
+        "amount": 252.5,
+        "status": "ACTIVE",
+        "timestamp": "2026-09-04T11:51:02.542Z"
+      },
+      {
         "id": "bid-1787933637711",
         "bidder": "BUYER",
         "email": "buyer@example.com",
@@ -397,8 +405,8 @@
     "lat": 12.957629225090054,
     "lng": 77.64260851433252,
     "sellerEmail": "seller3@apexrealty.com",
-    "auctionEnabled": false,
-    "startingPrice": 69.6,
+    "auctionEnabled": true,
+    "startingPrice": 81.9,
     "minIncrement": 1,
     "auctionEnd": null,
     "bids": []
@@ -970,7 +978,16 @@
     "startingPrice": 91.7,
     "minIncrement": 1,
     "auctionEnd": "2026-08-13T15:50:51.713Z",
-    "bids": []
+    "bids": [
+      {
+        "id": "bid-1788505830638",
+        "bidder": "BUYER",
+        "email": "buyer@example.com",
+        "amount": 119.7,
+        "status": "ACTIVE",
+        "timestamp": "2026-09-04T07:10:30.638Z"
+      }
+    ]
   },
   {
     "id": "prop-17",
@@ -1865,7 +1882,16 @@
     "startingPrice": 107,
     "minIncrement": 1,
     "auctionEnd": "2026-08-14T15:50:51.713Z",
-    "bids": []
+    "bids": [
+      {
+        "id": "bid-1788505930232",
+        "bidder": "BUYER",
+        "email": "buyer@example.com",
+        "amount": 109.5,
+        "status": "ACTIVE",
+        "timestamp": "2026-09-04T07:12:10.232Z"
+      }
+    ]
   },
   {
     "id": "prop-33",

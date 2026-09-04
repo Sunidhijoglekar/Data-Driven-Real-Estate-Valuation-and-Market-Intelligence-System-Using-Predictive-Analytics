@@ -157,10 +157,12 @@ export default function MLAnalytics() {
     { year: "2023", actualPrice: 68.0, forecastPrice: 67.5 },
     { year: "2024", actualPrice: 75.0, forecastPrice: 74.2 },
     { year: "2025", actualPrice: 82.5, forecastPrice: 81.8 },
-    { year: "2026 (Pred)", actualPrice: null, forecastPrice: 90.5 },
+    { year: "2026 (Now)", actualPrice: 91.0, forecastPrice: 90.5 },
     { year: "2027 (Pred)", actualPrice: null, forecastPrice: 99.2 },
     { year: "2028 (Pred)", actualPrice: null, forecastPrice: 108.0 },
-    { year: "2029 (Pred)", actualPrice: null, forecastPrice: 116.1 }
+    { year: "2029 (Pred)", actualPrice: null, forecastPrice: 116.1 },
+    { year: "2030 (Pred)", actualPrice: null, forecastPrice: 125.0 },
+    { year: "2031 (Pred)", actualPrice: null, forecastPrice: 134.2 }
   ];
 
   const lstmLossData = metricsData?.lstmLossHistory || [

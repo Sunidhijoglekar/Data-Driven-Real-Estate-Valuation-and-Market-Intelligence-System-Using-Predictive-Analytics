@@ -80,10 +80,12 @@ export default function Home() {
     { year: '2023', marketVal: 68 },
     { year: '2024', marketVal: 75 },
     { year: '2025', marketVal: 82.5 },
-    { year: '2026 (Pred)', marketVal: 91 },
+    { year: '2026 (Now)', marketVal: 91 },
     { year: '2027 (Pred)', marketVal: 100 },
     { year: '2028 (Pred)', marketVal: 110 },
-    { year: '2029 (Pred)', marketVal: 118 },
+    { year: '2029 (Pred)', marketVal: 121 },
+    { year: '2030 (Pred)', marketVal: 132 },
+    { year: '2031 (Pred)', marketVal: 144 },
   ];
 
   return (
