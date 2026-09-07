@@ -296,11 +296,20 @@
     "lat": 12.933759875234603,
     "lng": 77.56191781895681,
     "sellerEmail": "seller@apexrealty.com",
-    "auctionEnabled": false,
-    "startingPrice": 159.3,
+    "auctionEnabled": true,
+    "startingPrice": 187.4,
     "minIncrement": 1,
     "auctionEnd": null,
-    "bids": []
+    "bids": [
+      {
+        "id": "bid-1788789971180",
+        "bidder": "BUYER",
+        "email": "buyer@example.com",
+        "amount": 191.9,
+        "status": "ACTIVE",
+        "timestamp": "2026-09-07T14:06:11.180Z"
+      }
+    ]
   },
   {
     "id": "prop-5",
