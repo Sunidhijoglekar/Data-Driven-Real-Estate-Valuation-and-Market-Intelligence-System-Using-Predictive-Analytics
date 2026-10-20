@@ -47,7 +47,7 @@ export default function LiveAuction({ user }) {
         }
       }
     } catch (err) {
-      console.error('Error fetching live auction state:', err);
+      setStatusMsg({ type: 'error', text: err.response?.data?.error || 'Unable to refresh auction.' });
     } finally {
       if (!silent) setLoading(false);
     }
@@ -84,12 +84,12 @@ export default function LiveAuction({ user }) {
   }, [auction]);
 
   // Check if buyer has token/authorized participant status
-  const isAuthorizedParticipant = auction?.participants?.some(p => p.buyer_id === buyerId || p.buyer_email === buyerId) ||
+  const isAuthorizedParticipant = auction?.participants?.some(p => p.buyer_id === buyerId || p.buyer_email === buyerId) &&
     auction?.registrations?.some(r => (r.buyer_id === buyerId || r.buyer_email === buyerId) && r.status === 'APPROVED');
 
   const handlePlaceBid = async (e) => {
     e.preventDefault();
-    if (!auction) return;
+    if (!auction || !isAuthorizedParticipant) return;
 
     setStatusMsg({ type: '', text: '' });
     const val = parseFloat(bidAmount);
@@ -101,32 +101,21 @@ export default function LiveAuction({ user }) {
       return;
     }
 
-    if (auction.bids && auction.bids.length > 0) {
-      if (val < currentHighest + minInc) {
-        setStatusMsg({
-          type: 'error',
-          text: `Bid must be at least ₹${currentHighest + minInc} Lakhs (Current Highest: ₹${currentHighest} Lakhs + Min Increment: ₹${minInc} Lakhs).`
-        });
-        return;
-      }
-    } else {
-      if (val < auction.starting_price) {
-        setStatusMsg({
-          type: 'error',
-          text: `Bid must be at least the starting price of ₹${auction.starting_price} Lakhs.`
-        });
-        return;
-      }
+    if (val < currentHighest + minInc) {
+      setStatusMsg({ type: 'error', text: `Bid must be at least ₹${currentHighest + minInc} Lakhs.` });
+      return;
     }
 
     setBidding(true);
     try {
-      await apiService.placeAuctionBid(auction.auction_id, {
+      const result = await apiService.placeAuctionBid(auction.auction_id, {
         buyerId,
         buyerName,
         bidAmount: val
       });
 
+      setAuction(result.auction);
+      setBidAmount(String(result.auction.current_highest_bid + result.auction.minimum_increment));
       setStatusMsg({ type: 'success', text: `Your bid of ₹${val} Lakhs was successfully placed!` });
       await fetchAuctionState(true);
     } catch (err) {
@@ -148,6 +137,8 @@ export default function LiveAuction({ user }) {
       </div>
     );
   }
+
+  if (!auction) return <div className="max-w-2xl mx-auto p-8 text-rose-700" role="alert">{statusMsg.text || 'Auction not found.'}</div>;
 
   // GATING: IF NOT AUTHORIZED TOKEN PARTICIPANT
   if (!isAuthorizedParticipant) {
@@ -198,6 +189,7 @@ export default function LiveAuction({ user }) {
   const bids = auction?.bids || [];
   const isFrozen = auction?.status === 'FROZEN';
   const isPaused = auction?.status === 'PAUSED';
+  const canBid = auction?.can_bid && Date.now() >= Date.parse(auction.auction_start) && Date.now() < Date.parse(auction.auction_end) && isAuthorizedParticipant && user?.role === 'Buyer';
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-8">
@@ -417,6 +409,7 @@ export default function LiveAuction({ user }) {
               </div>
             )}
 
+            {!canBid && !isFrozen && !isPaused && <p className="text-xs text-amber-700">Bidding is unavailable. Auction status: {auction?.status}. The seller must start the auction within its scheduled time.</p>}
             {isFrozen ? (
               <div className="p-4 bg-slate-100 rounded-2xl text-center space-y-2 text-slate-700">
                 <Snowflake className="w-6 h-6 text-cyan-600 mx-auto" />
@@ -442,7 +435,7 @@ export default function LiveAuction({ user }) {
                     <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">₹</span>
                     <input
                       type="number"
-                      step="0.5"
+                      step="0.000001"
                       value={bidAmount}
                       onChange={(e) => setBidAmount(e.target.value)}
                       required
@@ -455,7 +448,7 @@ export default function LiveAuction({ user }) {
 
                 <button
                   type="submit"
-                  disabled={bidding}
+                  disabled={bidding || !canBid}
                   className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-black text-xs uppercase tracking-wider rounded-xl shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer"
                 >
                   {bidding ? (

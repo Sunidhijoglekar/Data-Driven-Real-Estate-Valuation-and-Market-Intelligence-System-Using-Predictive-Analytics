@@ -96,7 +96,7 @@ export default function PropertyDetail({ user }) {
             Property Valuation
           </button>
 
-          {property.auctionEnabled && (
+          {property.can_request_access && (
             <button
               onClick={() => navigate(`/auction/${property.id}/join`)}
               className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-2"
@@ -128,7 +128,7 @@ export default function PropertyDetail({ user }) {
               <span className="bg-white/95 backdrop-blur-md px-3 py-1 rounded-full text-xs font-bold text-blue-800 shadow-sm border border-blue-100">
                 {property.type || 'Commercial Asset'}
               </span>
-              {property.auctionEnabled && (
+              {property.can_request_access && (
                 <span className="bg-amber-500 text-white px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-1 shadow-sm">
                   <Gavel className="w-3.5 h-3.5" />
                   Live Bidding Event
@@ -279,7 +279,7 @@ export default function PropertyDetail({ user }) {
                 View Property Valuation
               </button>
 
-              {property.auctionEnabled && (
+              {property.can_request_access && (
                 <button
                   onClick={() => navigate(`/auction/${property.id}/join`)}
                   className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs rounded-xl shadow-md transition-colors flex items-center justify-center gap-2 cursor-pointer"

@@ -1,3 +1,5 @@
+> Superseded implementation notes: see [the verified bidding repair report](docs/BIDDING_REPAIR_REPORT.md). Some claims below describe an earlier intended flow rather than the code that was present.
+
 # Real Estate Project — Auction Flow Fixes
 
 ## Active frontend

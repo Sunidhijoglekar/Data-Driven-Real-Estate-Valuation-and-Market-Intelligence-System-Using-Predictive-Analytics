@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { apiService } from './services/api';
+import { sessionStore } from './services/session';
 import Navbar from './components/Navbar';
 import ProtectedRoute from './components/ProtectedRoute';
 import Home from './pages/Home';
@@ -146,28 +148,45 @@ function MainLayout({ user, onLogout, handleLoginSuccess }) {
 
 export default function App() {
   const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('realestate_ai_user');
-    return saved ? JSON.parse(saved) : null;
+    localStorage.removeItem('realestate_ai_user');
+    return sessionStore.read();
   });
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [sessionError, setSessionError] = useState('');
 
   useEffect(() => {
-    if (user) {
-      localStorage.setItem('realestate_ai_user', JSON.stringify(user));
-    } else {
-      localStorage.removeItem('realestate_ai_user');
-    }
-  }, [user]);
+    let cancelled = false;
+    const stored = sessionStore.read();
+    if (!stored) { setCheckingSession(false); return; }
+    apiService.getSession().then(({ user: verified }) => {
+      if (cancelled) return;
+      const nextUser = { ...verified, token: stored.token };
+      sessionStore.write(nextUser);
+      setUser(nextUser);
+    }).catch(error => {
+      if (cancelled) return;
+      sessionStore.clear(); setUser(null);
+      if (error.response?.status !== 401) setSessionError('Could not verify your session. Please sign in again.');
+    }).finally(() => { if (!cancelled) setCheckingSession(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   const handleLoginSuccess = (userData) => {
+    sessionStore.write(userData);
     setUser(userData);
+    setSessionError('');
   };
 
-  const handleLogout = () => {
-    setUser(null);
+  const handleLogout = async () => {
+    try { await apiService.logout(); }
+    finally { sessionStore.clear(); setUser(null); }
   };
+
+  if (checkingSession) return <div className="p-12 text-center" role="status">Checking your session...</div>;
 
   return (
     <Router>
+      {sessionError && <p className="p-3 bg-amber-50 text-amber-800 text-center" role="alert">{sessionError}</p>}
       <MainLayout user={user} onLogout={handleLogout} handleLoginSuccess={handleLoginSuccess} />
     </Router>
   );

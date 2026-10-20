@@ -23,8 +23,8 @@ export default function JoinAuction({ user }) {
   const buyerId = user ? user.email : 'buyer@example.com';
   const buyerName = user ? user.name : 'Sunidhi Joglekar';
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       let aucData = null;
       let propData = null;
@@ -49,9 +49,7 @@ export default function JoinAuction({ user }) {
 
       if (aucData && aucData.registrations) {
         const found = aucData.registrations.find(r => r.buyer_id === buyerId || r.buyer_email === buyerId);
-        if (found) {
-          setUserReg(found);
-        }
+        setUserReg(found || null);
       }
     } catch (err) {
       console.error('Error loading join auction details:', err);
@@ -63,7 +61,7 @@ export default function JoinAuction({ user }) {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(loadData, 3000);
+    const interval = setInterval(() => loadData(true), 3000);
     return () => clearInterval(interval);
   }, [id, buyerId]);
 
@@ -107,11 +105,12 @@ export default function JoinAuction({ user }) {
   }
 
   const propImage = property?.image || 'https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=1200&q=80';
-  const isAuctionClosed = auction?.status === 'COMPLETED' || auction?.status === 'CANCELLED' || (auction?.auction_end && new Date() > new Date(auction.auction_end));
-  const isApproved = userReg && userReg.status === 'APPROVED';
-  const isPending = userReg && userReg.status === 'PENDING';
-  const isLive = auction && !isAuctionClosed && (auction.status === 'LIVE' || (auction.auction_start && new Date() >= new Date(auction.auction_start) && (!auction.auction_end || new Date() <= new Date(auction.auction_end))));
-  const isRegOpen = auction && !isAuctionClosed && !isLive && (auction.status === 'REGISTRATION_OPEN' || auction.status === 'UPCOMING' || (!auction.status || (auction.auction_start && new Date() < new Date(auction.auction_start))));
+  const isAuctionClosed = ['ENDED', 'CLOSED', 'COMPLETED', 'CANCELLED'].includes(auction?.status) || (auction?.auction_end && Date.now() >= Date.parse(auction.auction_end));
+  const isApproved = userReg?.status === 'APPROVED';
+  const isPending = userReg?.status === 'PENDING';
+  const isLive = auction?.can_bid && !isAuctionClosed;
+  const isRegOpen = !isAuctionClosed && auction?.can_request_access;
+
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 space-y-6">
@@ -270,6 +269,9 @@ export default function JoinAuction({ user }) {
             </div>
           )}
 
+          {userReg?.status === 'REJECTED' && (
+            <div className="p-4 bg-rose-50 text-rose-700 rounded-xl text-xs" role="status">The seller rejected your request to participate in this auction.</div>
+          )}
           {/* STATE 4: REGISTRATION OPEN & USER NOT YET REGISTERED */}
           {!userReg && isRegOpen && (
             <form onSubmit={handleRequestToken} className="space-y-5 bg-slate-50/70 p-6 rounded-2xl border border-slate-200">

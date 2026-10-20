@@ -384,7 +384,7 @@ export default function PropertyValuation({ user }) {
 
             <div className="flex flex-wrap gap-3 shrink-0">
 
-              {property.auctionEnabled && (
+              {property.can_request_access && (
 
                 <button
                   onClick={() =>
@@ -1094,7 +1094,7 @@ export default function PropertyValuation({ user }) {
 
               <div className="flex gap-3">
 
-                {property.auctionEnabled && (
+                {property.can_request_access && (
 
                   <button
                     onClick={() =>

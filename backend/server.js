@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { exec } from 'child_process';
+
 
 import authRoutes from './routes/authRoutes.js';
 import propertyRoutes from './routes/propertyRoutes.js';
@@ -76,17 +76,10 @@ async function startServer() {
 
     console.log(`Server running on ${url}`);
 
-    // Automatically open the application in the browser
-    setTimeout(() => {
-      if (process.platform === 'win32') {
-        exec(`start "" "${url}"`);
-      } else if (process.platform === 'darwin') {
-        exec(`open "${url}"`);
-      } else {
-        exec(`xdg-open "${url}"`);
-      }
-    }, 1000);
+
   });
 }
 
-startServer();
+process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
+startServer().catch(error => { console.error(error); process.exit(1); });

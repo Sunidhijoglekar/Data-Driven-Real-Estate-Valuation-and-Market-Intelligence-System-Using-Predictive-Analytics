@@ -18,13 +18,14 @@ export default function SellerDashboard({ user, onLogout }) {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedAuction, setSelectedAuction] = useState(null);
+  const [reviewingId, setReviewingId] = useState(null);
   const [actionMsg, setActionMsg] = useState({ type: '', text: '' });
 
   // Add Property Form
   const [propForm, setPropForm] = useState({
     name: '',
     locality: '',
-    city: 'Bengaluru',
+    city: 'Bangalore',
     price: '',
     bhk: '3',
     area_sqft: '1500',
@@ -32,6 +33,7 @@ export default function SellerDashboard({ user, onLogout }) {
     image: 'https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=800&q=80',
     description: ''
   });
+  const [savingProperty, setSavingProperty] = useState(false);
   const [addPropSuccess, setAddPropSuccess] = useState(false);
 
   // Auction Creation Form
@@ -40,8 +42,7 @@ export default function SellerDashboard({ user, onLogout }) {
     starting_price: '',
     minimum_increment: '1',
     duration_hours: '24',
-    max_participants: '10',
-    auction_start: new Date().toISOString().slice(0, 16)
+    max_participants: '10'
   });
   const [creating, setCreating] = useState(false);
 
@@ -53,6 +54,8 @@ export default function SellerDashboard({ user, onLogout }) {
   const [selling, setSelling] = useState(false);
 
   const sellerId = user ? user.email : 'seller@apexrealty.com';
+  const existingSelectedAuction = auctions.find(a => a.is_published && String(a.property_id) === String(createForm.property_id) && !['ENDED', 'CLOSED', 'CANCELLED', 'COMPLETED'].includes(a.status));
+  const openExistingAuction = auction => { setSelectedAuction(auction); handleTabChange('auction-management'); };
 
   const handleTabChange = (tabId) => {
     setSearchParams({ tab: tabId });
@@ -62,29 +65,25 @@ export default function SellerDashboard({ user, onLogout }) {
     try {
       const [aucRes, propRes, notifRes] = await Promise.all([
         apiService.getAuctions(),
-        apiService.getProperties(),
+        apiService.getSellerAuctionInventory(),
         apiService.getNotifications(sellerId)
       ]);
 
       if (aucRes && aucRes.auctions) {
-        setAuctions(aucRes.auctions);
-        if (!selectedAuction && aucRes.auctions.length > 0) {
-          setSelectedAuction(aucRes.auctions[0]);
-        } else if (selectedAuction) {
-          const updated = aucRes.auctions.find(a => a.auction_id === selectedAuction.auction_id);
-          if (updated) setSelectedAuction(updated);
-        }
+        const ownedAuctions = aucRes.auctions.filter(a => a.can_manage_auction);
+        setAuctions(ownedAuctions);
+        setSelectedAuction(previous => ownedAuctions.find(a => a.auction_id === previous?.auction_id) || ownedAuctions[0] || null);
       }
 
       if (propRes && propRes.properties) {
-        setProperties(propRes.properties);
+        setProperties(propRes.properties.filter(p => p.can_manage_auctions));
       }
 
       if (notifRes && notifRes.notifications) {
         setNotifications(notifRes.notifications);
       }
     } catch (err) {
-      console.error('Error fetching seller dashboard data:', err);
+      setActionMsg({ type: 'error', text: err.response?.data?.error || 'Could not refresh seller dashboard.' });
     } finally {
       setLoading(false);
     }
@@ -94,7 +93,7 @@ export default function SellerDashboard({ user, onLogout }) {
     fetchData();
     const interval = setInterval(fetchData, 3000);
     return () => clearInterval(interval);
-  }, []);
+  }, [sellerId]);
 
   const handleUpdateAuctionStatus = async (auctionId, newStatus) => {
     setActionMsg({ type: '', text: '' });
@@ -115,30 +114,41 @@ export default function SellerDashboard({ user, onLogout }) {
   };
 
   const handleRegistrationAction = async (registrationId, newStatus) => {
+    if (!registrationId || reviewingId) return;
+    setReviewingId(registrationId);
     setActionMsg({ type: '', text: '' });
     try {
-      await apiService.updateRegistrationStatus(registrationId, newStatus, sellerId);
+      const result = await apiService.updateRegistrationStatus(registrationId, newStatus, sellerId);
+      const update = auction => ({ ...auction, registrations: auction.registrations?.map(reg => (reg.id === registrationId || reg.registration_id === registrationId) ? result.registration : reg) });
+      setAuctions(previous => previous.map(update));
+      setSelectedAuction(previous => previous ? update(previous) : previous);
       setActionMsg({
         type: 'success',
-        text: `Registration request ${newStatus.toLowerCase()}! Token issued.`
+        text: newStatus === 'APPROVED' ? 'Request approved. Token issued.' : 'Request rejected.'
       });
-      fetchData();
+      await fetchData();
     } catch (err) {
       setActionMsg({
         type: 'error',
         text: err.response?.data?.error || err.message || 'Failed to update registration status.'
       });
-    }
+    } finally { setReviewingId(null); }
   };
 
   const handleAddPropertySubmit = async (e) => {
     e.preventDefault();
+    if (savingProperty) return;
     setActionMsg({ type: '', text: '' });
+    const priceNum = Number(propForm.price);
+    const areaNum = Number(propForm.area_sqft);
+    if (!propForm.name.trim() || !Number.isFinite(priceNum) || priceNum <= 0 || !Number.isFinite(areaNum) || areaNum <= 0) {
+      setActionMsg({ type: 'error', text: 'Enter a property name, positive price and positive area.' });
+      return;
+    }
+    setSavingProperty(true);
     try {
-      const priceNum = parseFloat(propForm.price) || 120;
-      const areaNum = parseInt(propForm.area_sqft, 10) || 1500;
       const newPropData = {
-        name: propForm.name,
+        name: propForm.name.trim(),
         locality: propForm.locality || 'Prime Locality',
         city: propForm.city || 'Bangalore',
         price: priceNum,
@@ -153,8 +163,12 @@ export default function SellerDashboard({ user, onLogout }) {
       };
 
       const res = await apiService.createProperty(newPropData);
-      const created = res.property || { id: `prop_${Date.now()}`, ...newPropData };
-      setProperties(prev => [created, ...prev]);
+      if (!res.property) throw new Error('Server did not return the saved property');
+      const created = res.property;
+      setProperties(prev => [created, ...prev.filter(p => p.id !== created.id)]);
+      setCreateForm(previous => ({ ...previous, property_id: String(created.id), starting_price: String(created.price) }));
+      setActionMsg({ type: 'success', text: 'Property saved to your account and selected below. Set the auction details to continue.' });
+      handleTabChange('create-auction');
       setAddPropSuccess(true);
       setTimeout(() => setAddPropSuccess(false), 4000);
       setPropForm({
@@ -168,19 +182,20 @@ export default function SellerDashboard({ user, onLogout }) {
         image: 'https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=800&q=80',
         description: ''
       });
-      fetchData();
+      await fetchData();
     } catch (err) {
       setActionMsg({
         type: 'error',
         text: err.response?.data?.error || err.message || 'Failed to add property.'
       });
-    }
+    } finally { setSavingProperty(false); }
   };
 
   const handleCreateAuctionSubmit = async (e) => {
     e.preventDefault();
+    if (existingSelectedAuction) { openExistingAuction(existingSelectedAuction); return; }
     if (!createForm.property_id) {
-      setActionMsg({ type: 'error', text: 'Please select a property from your inventory to schedule an auction.' });
+      setActionMsg({ type: 'error', text: 'Please select a property from your inventory to launch an auction.' });
       return;
     }
 
@@ -190,9 +205,9 @@ export default function SellerDashboard({ user, onLogout }) {
     try {
       const selectedProp = properties.find(p => String(p.id) === String(createForm.property_id));
       const startPrice = parseFloat(createForm.starting_price) || (selectedProp ? parseFloat(selectedProp.price) : 100);
-      const minInc = parseFloat(createForm.minimum_increment) || 1;
-      const durHours = parseFloat(createForm.duration_hours) || 24;
-      const maxBidders = parseInt(createForm.max_participants, 10) || 10;
+      const minInc = Number(createForm.minimum_increment);
+      const durHours = Number(createForm.duration_hours);
+      const maxBidders = Number(createForm.max_participants);
 
       const res = await apiService.createAuction({
         property_id: String(createForm.property_id),
@@ -200,13 +215,12 @@ export default function SellerDashboard({ user, onLogout }) {
         starting_price: startPrice,
         minimum_increment: minInc,
         duration_hours: durHours,
-        max_participants: maxBidders,
-        auction_start: createForm.auction_start || new Date().toISOString()
+        max_participants: maxBidders
       });
 
       setActionMsg({
         type: 'success',
-        text: `Auction Scheduled Successfully! Registration is now open for token requests.`
+        text: `Live auction launched successfully! Buyers can now request access and bid after approval.`
       });
       await fetchData();
       if (res.auction) {
@@ -227,7 +241,7 @@ export default function SellerDashboard({ user, onLogout }) {
 
   const handleOpenSellModal = (auc) => {
     setAuctionToSell(auc);
-    const highest = auc.current_highest_bidder || (auc.participants && auc.participants[0]?.buyer_id) || '';
+    const highest = auc.highest_bidder_id || (auc.participants && auc.participants[0]?.buyer_id) || '';
     setSelectedBuyerId(highest);
     setCustomFinalPrice(auc.current_highest_bid || auc.starting_price || '');
     setShowSellModal(true);
@@ -316,7 +330,7 @@ export default function SellerDashboard({ user, onLogout }) {
 
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
               <span className="text-[10px] uppercase font-extrabold text-emerald-600">Active Auctions</span>
-              <strong className="text-2xl font-black text-emerald-600 block">{auctions.filter(a => a.status !== 'COMPLETED' && a.status !== 'CANCELLED').length}</strong>
+              <strong className="text-2xl font-black text-emerald-600 block">{auctions.filter(a => a.is_published && !['ENDED', 'CLOSED', 'COMPLETED', 'CANCELLED'].includes(a.status)).length}</strong>
             </div>
 
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
@@ -385,6 +399,8 @@ export default function SellerDashboard({ user, onLogout }) {
 
                       <div className="flex items-center gap-2 shrink-0">
                         <button
+                          disabled={!!reviewingId || !req.auction.can_request_access}
+                          title={req.auction.can_request_access ? 'Approve buyer access' : 'Launch this auction before approving buyer access'}
                           onClick={() => handleRegistrationAction(req.registration_id || req.id, 'APPROVED')}
                           className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                         >
@@ -392,6 +408,7 @@ export default function SellerDashboard({ user, onLogout }) {
                           Approve & Issue Token
                         </button>
                         <button
+                          disabled={!!reviewingId}
                           onClick={() => handleRegistrationAction(req.registration_id || req.id, 'REJECTED')}
                           className="px-3 py-2 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 font-bold text-xs rounded-xl transition-colors cursor-pointer"
                         >
@@ -500,7 +517,7 @@ export default function SellerDashboard({ user, onLogout }) {
                 <Building2 className="w-5 h-5 text-emerald-600" />
                 My Listed Properties ({properties.length})
               </h2>
-              <p className="text-xs text-slate-500">Real estate inventory submitted under your account</p>
+              <p className="text-xs text-slate-500">Properties you own or have permission to manage for auctions</p>
             </div>
             <button
               onClick={() => handleTabChange('add-property')}
@@ -544,6 +561,7 @@ export default function SellerDashboard({ user, onLogout }) {
             </div>
           )}
 
+          {actionMsg.type === 'error' && <p role="alert" className="p-4 bg-rose-50 text-rose-700 rounded-xl text-xs">{actionMsg.text}</p>}
           <form onSubmit={handleAddPropertySubmit} className="space-y-4 text-xs">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
@@ -551,6 +569,7 @@ export default function SellerDashboard({ user, onLogout }) {
                 <input
                   type="text"
                   required
+                  aria-label="Property Name"
                   placeholder="e.g. Grand Sapphire Heights"
                   value={propForm.name}
                   onChange={e => setPropForm({ ...propForm, name: e.target.value })}
@@ -584,7 +603,10 @@ export default function SellerDashboard({ user, onLogout }) {
                 <label className="block font-bold text-slate-700 mb-1">Listed Price (₹ Lakhs)</label>
                 <input
                   type="number"
+                  step="any"
+                  min="0.000001"
                   required
+                  aria-label="Listed Price (Lakhs)"
                   placeholder="150"
                   value={propForm.price}
                   onChange={e => setPropForm({ ...propForm, price: e.target.value })}
@@ -606,6 +628,9 @@ export default function SellerDashboard({ user, onLogout }) {
                 <label className="block font-bold text-slate-700 mb-1">Area (Sq. Ft.)</label>
                 <input
                   type="number"
+                  aria-label="Area (Sq. Ft.)"
+                  required
+                  min="1"
                   value={propForm.area_sqft}
                   onChange={e => setPropForm({ ...propForm, area_sqft: e.target.value })}
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl"
@@ -625,9 +650,10 @@ export default function SellerDashboard({ user, onLogout }) {
 
             <button
               type="submit"
+              disabled={savingProperty}
               className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md cursor-pointer"
             >
-              Submit Listing
+              {savingProperty ? 'Saving Property...' : 'Save Property & Continue to Auction'}
             </button>
           </form>
         </div>
@@ -654,7 +680,7 @@ export default function SellerDashboard({ user, onLogout }) {
               <tbody className="divide-y divide-slate-100">
                 {properties.map((p) => (
                   <tr key={p.id}>
-                    <td className="py-3 px-2 font-bold text-slate-900">{p.name}</td>
+                    <td className="py-3 px-2 font-bold text-slate-900">{p.name}{p.management_access === 'AUCTION_MANAGER' && <span className="block text-[10px] text-blue-700">Auction manager • Owner: {p.sellerEmail}</span>}</td>
                     <td className="py-3 px-2 text-slate-600">{p.city}</td>
                     <td className="py-3 px-2 font-bold text-emerald-600">₹{p.price} L</td>
                     <td className="py-3 px-2">
@@ -663,12 +689,16 @@ export default function SellerDashboard({ user, onLogout }) {
                     <td className="py-3 px-2">
                       <button
                         onClick={() => {
-                          setCreateForm({ ...createForm, property_id: String(p.id), starting_price: String(p.price) });
-                          handleTabChange('create-auction');
+                          const existing = auctions.find(a => a.is_published && String(a.property_id) === String(p.id) && !['ENDED', 'CLOSED', 'CANCELLED', 'COMPLETED'].includes(a.status));
+                          if (existing) openExistingAuction(existing);
+                          else {
+                            setCreateForm({ ...createForm, property_id: String(p.id), starting_price: String(p.price) });
+                            handleTabChange('create-auction');
+                          }
                         }}
                         className="px-2.5 py-1 bg-amber-500 text-white font-bold rounded text-[10px] cursor-pointer"
                       >
-                        Create Auction
+                        {p.current_auction_published && p.current_auction_id && !['ENDED', 'CLOSED', 'CANCELLED', 'COMPLETED'].includes(p.current_auction_status) ? 'Manage Existing Auction' : 'Create Auction'}
                       </button>
                     </td>
                   </tr>
@@ -685,7 +715,7 @@ export default function SellerDashboard({ user, onLogout }) {
           <div>
             <h2 className="font-heading text-xl font-extrabold text-slate-900 flex items-center gap-2">
               <Gavel className="w-5 h-5 text-amber-500" />
-              Schedule Real Estate Auction
+              Launch Real Estate Auction
             </h2>
             <p className="text-xs text-slate-500">Configure reserve price, duration, and participant cap for bidding event</p>
           </div>
@@ -696,6 +726,14 @@ export default function SellerDashboard({ user, onLogout }) {
             </div>
           )}
 
+          {!loading && properties.length === 0 ? (
+            <div className="p-6 bg-slate-50 border border-slate-200 rounded-2xl space-y-4" role="status">
+              <h3 className="font-bold text-slate-900">Add your first property to create an auction</h3>
+              <p className="text-sm text-slate-600">Your seller account has no unsold properties yet. Add your property details first; the saved listing will be selected here automatically.</p>
+              <p className="text-xs text-slate-500">This list shows properties you own or are authorized to manage for auctions. Other listings remain in the public catalogue.</p>
+              <button type="button" onClick={() => { setActionMsg({ type: '', text: '' }); handleTabChange('add-property'); }} className="px-5 py-3 bg-emerald-600 text-white font-bold text-sm rounded-xl inline-flex gap-2 items-center"><Plus className="w-4 h-4" />Add Your First Property</button>
+            </div>
+          ) : (
           <form onSubmit={handleCreateAuctionSubmit} className="space-y-4 text-xs">
             <div>
               <label className="block font-bold text-slate-700 mb-1">Select Property</label>
@@ -715,16 +753,22 @@ export default function SellerDashboard({ user, onLogout }) {
               >
                 <option value="">Select a property from inventory...</option>
                 {properties.map(p => (
-                  <option key={p.id} value={p.id}>{p.name} ({p.city} - ₹{p.price} Lakhs)</option>
+                  <option key={p.id} value={p.id}>{p.name} ({p.city} - ₹{p.price} Lakhs){p.management_access === 'AUCTION_MANAGER' ? ` • Managed for ${p.sellerEmail}` : ''}</option>
                 ))}
               </select>
             </div>
 
+            {existingSelectedAuction && <div className="p-4 bg-blue-50 text-blue-800 rounded-xl space-y-2" role="status">
+              <p>This property already has an auction ({existingSelectedAuction.status}). Open it to review buyer requests and start or manage bidding.</p>
+              <button type="button" onClick={() => openExistingAuction(existingSelectedAuction)} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold">Manage Existing Auction</button>
+            </div>}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Starting Price (₹ Lakhs)</label>
                 <input
                   type="number"
+                  step="any"
+                  min="0.000001"
                   required
                   value={createForm.starting_price}
                   onChange={e => setCreateForm({ ...createForm, starting_price: e.target.value })}
@@ -736,6 +780,8 @@ export default function SellerDashboard({ user, onLogout }) {
                 <label className="block font-bold text-slate-700 mb-1">Minimum Bid Increment (₹ Lakhs)</label>
                 <input
                   type="number"
+                  step="any"
+                  min="0.000001"
                   required
                   value={createForm.minimum_increment}
                   onChange={e => setCreateForm({ ...createForm, minimum_increment: e.target.value })}
@@ -747,6 +793,8 @@ export default function SellerDashboard({ user, onLogout }) {
                 <label className="block font-bold text-slate-700 mb-1">Duration (Hours)</label>
                 <input
                   type="number"
+                  step="any"
+                  min="0.000001"
                   required
                   value={createForm.duration_hours}
                   onChange={e => setCreateForm({ ...createForm, duration_hours: e.target.value })}
@@ -767,12 +815,13 @@ export default function SellerDashboard({ user, onLogout }) {
 
             <button
               type="submit"
-              disabled={creating}
+              disabled={creating || !!existingSelectedAuction}
               className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-md cursor-pointer"
             >
               {creating ? 'Creating Auction...' : 'Launch Live Auction'}
             </button>
           </form>
+          )}
         </div>
       )}
 
@@ -829,11 +878,12 @@ export default function SellerDashboard({ user, onLogout }) {
                     <h3 className="font-heading text-lg font-extrabold text-slate-900">
                       {selectedAuction.property?.name || selectedAuction.auction_id}
                     </h3>
-                    <p className="text-xs text-slate-500">ID: {selectedAuction.auction_id} • Status: <strong className="text-emerald-600">{selectedAuction.status}</strong></p>
+                    <p className="text-xs text-slate-500">ID: {selectedAuction.auction_id} • Status: <strong className="text-emerald-600">{selectedAuction.is_published ? selectedAuction.status : `Unpublished (${selectedAuction.status})`}</strong></p>
                   </div>
 
                   <div className="flex gap-2">
-                    {selectedAuction.status === 'UPCOMING' && (
+                    {!selectedAuction.is_published && <button onClick={() => { setCreateForm(previous => ({ ...previous, property_id: String(selectedAuction.property_id), starting_price: String(selectedAuction.starting_price) })); handleTabChange('create-auction'); }} className="px-3 py-1.5 bg-emerald-600 text-white font-bold text-xs rounded-xl">Configure & Launch Auction</button>}
+                    {selectedAuction.is_published && ['UPCOMING', 'REGISTRATION_OPEN', 'REGISTRATION_CLOSED'].includes(selectedAuction.status) && (
                       <button
                         onClick={() => handleUpdateAuctionStatus(selectedAuction.auction_id, 'LIVE')}
                         className="px-3 py-1.5 bg-emerald-600 text-white font-bold text-xs rounded-xl cursor-pointer"
@@ -841,6 +891,9 @@ export default function SellerDashboard({ user, onLogout }) {
                         Start Live
                       </button>
                     )}
+                    {selectedAuction.status === 'REGISTRATION_OPEN' && <button onClick={() => handleUpdateAuctionStatus(selectedAuction.auction_id, 'REGISTRATION_CLOSED')} className="px-3 py-1.5 bg-slate-700 text-white font-bold text-xs rounded-xl">Close Registration</button>}
+                    {selectedAuction.status === 'REGISTRATION_CLOSED' && <button onClick={() => handleUpdateAuctionStatus(selectedAuction.auction_id, 'REGISTRATION_OPEN')} className="px-3 py-1.5 bg-slate-700 text-white font-bold text-xs rounded-xl">Reopen Registration</button>}
+                    {['LIVE', 'PAUSED'].includes(selectedAuction.status) && <button onClick={() => handleUpdateAuctionStatus(selectedAuction.auction_id, 'FROZEN')} className="px-3 py-1.5 bg-cyan-700 text-white font-bold text-xs rounded-xl">Freeze Bidding</button>}
                     {selectedAuction.status === 'LIVE' && (
                       <button
                         onClick={() => handleUpdateAuctionStatus(selectedAuction.auction_id, 'PAUSED')}
@@ -857,7 +910,12 @@ export default function SellerDashboard({ user, onLogout }) {
                         Resume
                       </button>
                     )}
+                    {!['ENDED', 'CLOSED', 'CANCELLED', 'COMPLETED'].includes(selectedAuction.status) && (
+                      <button onClick={() => handleUpdateAuctionStatus(selectedAuction.auction_id, 'ENDED')} className="px-3 py-1.5 bg-slate-700 text-white font-bold text-xs rounded-xl">End Auction</button>
+                    )}
                     <button
+                      disabled={!selectedAuction.can_sell || ['CLOSED', 'CANCELLED', 'COMPLETED'].includes(selectedAuction.status)}
+                      title={selectedAuction.can_sell ? 'Choose the final buyer' : 'Final sale is reserved for the property owner'}
                       onClick={() => handleOpenSellModal(selectedAuction)}
                       className="px-3 py-1.5 bg-blue-600 text-white font-bold text-xs rounded-xl cursor-pointer"
                     >
@@ -866,29 +924,39 @@ export default function SellerDashboard({ user, onLogout }) {
                   </div>
                 </div>
 
+                <div className="space-y-2 text-xs">
+                  {selectedAuction.management_access === 'AUCTION_MANAGER' && <p className="p-3 bg-blue-50 text-blue-800 rounded-xl">Authorized auction manager. Owner: {selectedAuction.seller_id}. Final sale remains with the owner.</p>}
+                  <h4 className="font-bold">Highest Bid: ₹{selectedAuction.current_highest_bid} Lakhs</h4>
+                  <p>Leading buyer: {selectedAuction.highest_bidder_name || 'No bids yet'}</p>
+                  <h4 className="font-bold">Bidding History</h4>
+                  {selectedAuction.bids?.map(bid => <div key={bid.bid_id} className="flex justify-between border-b py-2"><span>{bid.bidder_name} • {new Date(bid.bid_time).toLocaleString()}</span><strong>₹{bid.bid_amount} Lakhs</strong></div>)}
+                </div>
                 {/* Pending Requests */}
                 <div className="space-y-3">
-                  <h4 className="font-bold text-xs uppercase text-slate-400">Pending Buyer Pass Requests</h4>
+                  <h4 className="font-bold text-xs uppercase text-slate-400">Buyer Access Requests</h4>
                   {(!selectedAuction.registrations || selectedAuction.registrations.length === 0) ? (
                     <p className="text-xs text-slate-400">No pass requests submitted yet.</p>
                   ) : (
                     <div className="space-y-2">
                       {selectedAuction.registrations.map(reg => (
-                        <div key={reg.registration_id} className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between text-xs">
+                        <div key={reg.registration_id || reg.id} className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between text-xs">
                           <div>
                             <strong className="text-slate-900 block">{reg.buyer_name || reg.buyer_id}</strong>
-                            <span className="text-[10px] text-slate-500">Pass Deposit: ₹{reg.deposit_amount} Lakhs • Status: {reg.status}</span>
+                            <span className="text-[10px] text-slate-500">Access status: {reg.status}</span>
                           </div>
                           {reg.status === 'PENDING' && (
                             <div className="flex gap-2">
                               <button
-                                onClick={() => handleRegistrationAction(reg.registration_id, 'APPROVED')}
+                                disabled={!!reviewingId || !selectedAuction.can_request_access}
+                                title={selectedAuction.can_request_access ? 'Approve buyer access' : 'Launch this auction before approving buyer access'}
+                                onClick={() => handleRegistrationAction(reg.registration_id || reg.id, 'APPROVED')}
                                 className="px-3 py-1 bg-emerald-600 text-white font-bold text-[10px] rounded-lg cursor-pointer"
                               >
                                 Approve & Issue Token
                               </button>
                               <button
-                                onClick={() => handleRegistrationAction(reg.registration_id, 'REJECTED')}
+                                disabled={!!reviewingId}
+                                onClick={() => handleRegistrationAction(reg.registration_id || reg.id, 'REJECTED')}
                                 className="px-3 py-1 bg-rose-600 text-white font-bold text-[10px] rounded-lg cursor-pointer"
                               >
                                 Reject
@@ -1065,6 +1133,8 @@ export default function SellerDashboard({ user, onLogout }) {
                 <label className="block font-bold text-slate-700 mb-1">Final Sale Amount (₹ Lakhs)</label>
                 <input
                   type="number"
+                  step="any"
+                  min="0.000001"
                   required
                   value={customFinalPrice}
                   onChange={e => setCustomFinalPrice(e.target.value)}

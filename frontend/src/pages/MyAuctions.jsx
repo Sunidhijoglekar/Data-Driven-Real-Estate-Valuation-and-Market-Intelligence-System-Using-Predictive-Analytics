@@ -18,7 +18,7 @@ export default function MyAuctions({ user }) {
   const fetchData = async () => {
     try {
       const [aucRes, regRes] = await Promise.all([
-        apiService.getAuctions(),
+        apiService.getAuctions({ view: 'history' }),
         apiService.getUserRegistrations(buyerId)
       ]);
 
@@ -43,17 +43,17 @@ export default function MyAuctions({ user }) {
 
   // Compute status helpers per auction
   const isPendingApproval = (auc) => {
-    const reg = userRegs.find(r => r.auction_id === auc.auction_id || String(r.property_id) === String(auc.property_id));
+    const reg = userRegs.find(r => r.auction_id === auc.auction_id);
     return reg && reg.status === 'PENDING';
   };
 
   const isApproved = (auc) => {
-    const reg = userRegs.find(r => r.auction_id === auc.auction_id || String(r.property_id) === String(auc.property_id));
+    const reg = userRegs.find(r => r.auction_id === auc.auction_id);
     return reg && reg.status === 'APPROVED';
   };
 
   const isRegClosedForUser = (auc) => {
-    const reg = userRegs.find(r => r.auction_id === auc.auction_id || String(r.property_id) === String(auc.property_id));
+    const reg = userRegs.find(r => r.auction_id === auc.auction_id);
     return auc.status === 'REGISTRATION_CLOSED' && (!reg || reg.status !== 'APPROVED');
   };
 

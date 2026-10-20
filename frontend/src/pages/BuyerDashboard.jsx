@@ -64,7 +64,7 @@ export default function BuyerDashboard({ user, onLogout }) {
   const fetchAuctionsAndRegistrations = async () => {
     try {
       const [aucRes, notifRes] = await Promise.all([
-        apiService.getAuctions(),
+        apiService.getAuctions({ view: 'live' }),
         apiService.getNotifications(buyerEmail)
       ]);
 
@@ -314,7 +314,7 @@ export default function BuyerDashboard({ user, onLogout }) {
           </div>
 
           {/* ================= ACTIVE LIVE AUCTIONS & ACCESS PASSES ================= */}
-          {auctions.filter(a => a.status !== 'COMPLETED' && a.status !== 'CLOSED').length > 0 && (
+          {auctions.filter(a => a.is_visible_live).length > 0 && (
             <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-7 shadow-xs space-y-5">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
                 <div className="space-y-1">
@@ -338,12 +338,12 @@ export default function BuyerDashboard({ user, onLogout }) {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {auctions.filter(a => a.status !== 'COMPLETED' && a.status !== 'CLOSED').map(auc => {
+                {auctions.filter(a => a.is_visible_live).map(auc => {
                   const prop = auc.property || {};
                   const regStatus = getAuctionRegistrationStatus(auc);
                   const isApproved = regStatus === 'APPROVED';
                   const isPending = regStatus === 'PENDING';
-                  const isLive = auc.status === 'LIVE';
+                  const isLive = auc.can_bid;
 
                   return (
                     <div
@@ -366,7 +366,7 @@ export default function BuyerDashboard({ user, onLogout }) {
                               </span>
                             ) : (
                               <span className="px-2.5 py-0.5 bg-blue-600 text-white font-bold text-[9px] uppercase tracking-wider rounded-full shadow-sm">
-                                REGISTRATION OPEN
+                                UPCOMING
                               </span>
                             )}
                           </div>
@@ -407,7 +407,7 @@ export default function BuyerDashboard({ user, onLogout }) {
 
                       {/* Action Button */}
                       <div>
-                        {isApproved ? (
+                        {isApproved && auc.can_bid ? (
                           <button
                             onClick={() => navigate(`/auction/${prop.id || auc.auction_id}/live`)}
                             className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
@@ -422,7 +422,7 @@ export default function BuyerDashboard({ user, onLogout }) {
                               Requested • Waiting for Seller Approval
                             </p>
                           </div>
-                        ) : (
+                        ) : auc.can_request_access ? (
                           <button
                             onClick={() => setSelectedAuctionForRequest(auc)}
                             className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
@@ -430,7 +430,7 @@ export default function BuyerDashboard({ user, onLogout }) {
                             <Ticket className="w-3.5 h-3.5" />
                             Request Access to Bid 🎟️
                           </button>
-                        )}
+                        ) : <p className="text-xs text-slate-500">Participation opens when this auction becomes active.</p>}
                       </div>
                     </div>
                   );
@@ -788,7 +788,7 @@ export default function BuyerDashboard({ user, onLogout }) {
                   </div>
 
                   <div className="shrink-0">
-                    {notif.type === 'AUCTION_CREATED' && (
+                    {notif.type === 'AUCTION_CREATED' && notif.can_request_access && (
                       <button
                         onClick={() => {
                           const targetAuc = auctions.find(a => a.auction_id === notif.auction_id || String(a.property_id) === String(notif.property_id));

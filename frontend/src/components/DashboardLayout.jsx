@@ -12,6 +12,7 @@ export default function DashboardLayout({ user, onLogout, activeTab, onTabChange
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [notificationError, setNotificationError] = useState('');
   const [notifications, setNotifications] = useState([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
 
@@ -23,9 +24,10 @@ export default function DashboardLayout({ user, onLogout, activeTab, onTabChange
       const res = await apiService.getNotifications(user.email);
       if (res && Array.isArray(res.notifications)) {
         setNotifications(res.notifications);
+        setNotificationError('');
       }
-    } catch {
-      // Ignore polling errors
+    } catch (error) {
+      setNotificationError(error.response?.data?.error || 'Notifications could not be refreshed. Retrying...');
     }
   };
 
@@ -195,6 +197,7 @@ export default function DashboardLayout({ user, onLogout, activeTab, onTabChange
                     </div>
 
                     <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
+                      {notificationError && <p className="text-xs text-rose-600 p-3" role="alert">{notificationError}</p>}
                       {notifications.length === 0 ? (
                         <p className="text-xs text-slate-400 text-center py-6">No notifications yet.</p>
                       ) : (
@@ -223,7 +226,7 @@ export default function DashboardLayout({ user, onLogout, activeTab, onTabChange
                             <p className="text-[11px] text-slate-600 leading-snug">{notif.message}</p>
                             
                             {/* Action Buttons based on notification type */}
-                            {notif.type === 'AUCTION_CREATED' && (
+                            {notif.type === 'AUCTION_CREATED' && notif.can_request_access && (
                               <button
                                 onClick={() => {
                                   setShowNotifPanel(false);

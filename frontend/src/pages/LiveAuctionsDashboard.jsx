@@ -24,7 +24,7 @@ export default function LiveAuctionsDashboard({ user }) {
 
   const fetchAuctionsData = async () => {
     try {
-      const res = await apiService.getAuctions();
+      const res = await apiService.getAuctions({ view: 'live' });
       if (res && res.auctions) {
         setAuctions(res.auctions);
       }
@@ -65,23 +65,16 @@ export default function LiveAuctionsDashboard({ user }) {
 
   // Compute auction status string according to spec: Live / Registration Open / Closed
   const getAuctionDisplayStatus = (auc) => {
-    if (auc.status === 'CANCELLED' || auc.status === 'COMPLETED') return 'Closed';
-    const start = new Date(auc.auction_start);
-    const end = new Date(auc.auction_end);
-    if (now > end) return 'Closed';
-    if (auc.status === 'REGISTRATION_CLOSED') return 'Registration Closed';
-    if (now < start || auc.status === 'REGISTRATION_OPEN' || auc.status === 'UPCOMING') return 'Registration Open';
-    return 'Live';
+    if (['ENDED', 'CLOSED', 'CANCELLED', 'COMPLETED'].includes(auc.status) || now >= new Date(auc.auction_end)) return 'Closed';
+    if (auc.is_upcoming) return 'Upcoming';
+    const labels = { REGISTRATION_OPEN: 'Registration Open', UPCOMING: 'Registration Open', REGISTRATION_CLOSED: 'Registration Closed', PAUSED: 'Paused', FROZEN: 'Frozen', LIVE: 'Live' };
+    return labels[auc.status] || auc.status;
   };
 
   const getAuctionComputedStatus = (auc) => {
-    if (auc.status === 'CANCELLED') return 'CANCELLED';
-    if (auc.status === 'COMPLETED') return 'ENDED';
-    const start = new Date(auc.auction_start);
-    const end = new Date(auc.auction_end);
-    if (now > end) return 'ENDED';
-    if (now < start || auc.status === 'REGISTRATION_OPEN' || auc.status === 'UPCOMING') return 'UPCOMING';
-    return 'LIVE';
+    if (['ENDED', 'CLOSED', 'CANCELLED', 'COMPLETED'].includes(auc.status) || now >= new Date(auc.auction_end)) return 'ENDED';
+    if (auc.is_upcoming || ['UPCOMING', 'REGISTRATION_OPEN', 'REGISTRATION_CLOSED'].includes(auc.status)) return 'UPCOMING';
+    return auc.status;
   };
 
   // Helper for format time remaining
@@ -349,7 +342,7 @@ export default function LiveAuctionsDashboard({ user }) {
             const prop = auc.property || {};
             const displayStatus = getAuctionDisplayStatus(auc);
             const isClosed = displayStatus === 'Closed';
-            const isRegOpen = displayStatus === 'Registration Open';
+            const isRegOpen = auc.can_request_access;
             const isLive = displayStatus === 'Live';
             const isRegClosed = displayStatus === 'Registration Closed';
 
@@ -368,14 +361,13 @@ export default function LiveAuctionsDashboard({ user }) {
               p => p.buyer_id === buyerEmail || p.buyer_email === buyerEmail
             );
             const hasApprovedReg = userRegistrations.some(
-              r => ((r.auction_id && String(r.auction_id) === String(auc.auction_id)) ||
-                    (r.property_id && (String(r.property_id) === String(auc.property_id) || String(r.property_id) === String(prop.id)))) &&
+              r => String(r.auction_id) === String(auc.auction_id) &&
                    r.status === 'APPROVED'
             );
             const hasApprovedInAuc = auc.registrations && auc.registrations.some(
               r => (r.buyer_id === buyerEmail || r.buyer_email === buyerEmail) && r.status === 'APPROVED'
             );
-            const hasAuctionPass = Boolean(isParticipant || hasApprovedReg || hasApprovedInAuc);
+            const hasAuctionPass = Boolean(isParticipant && (hasApprovedReg || hasApprovedInAuc));
 
             return (
               <div
@@ -429,7 +421,9 @@ export default function LiveAuctionsDashboard({ user }) {
                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
                           <span>Ended</span>
                         </>
-                      ) : isRegOpen ? (
+                      ) : auc.is_upcoming ? (
+                    <p className="p-3 bg-blue-50 text-blue-800 text-xs rounded-xl">Upcoming auction. Participation opens when it becomes active.</p>
+                  ) : isRegOpen ? (
                         <>
                           <Clock className="w-3.5 h-3.5 text-blue-400" />
                           <span>Starts in {timeRem}</span>
@@ -493,7 +487,7 @@ export default function LiveAuctionsDashboard({ user }) {
 
                       <div className="flex justify-between items-center text-slate-600">
                         <span>Auction Pass Token:</span>
-                        {hasAuctionPass ? (
+                        {hasAuctionPass && auc.can_bid ? (
                           <span className="text-emerald-600 font-extrabold flex items-center gap-1">
                             <ShieldCheck className="w-3.5 h-3.5" /> Pass Active
                           </span>

@@ -4,14 +4,18 @@
 import { db } from '../database/db.js';
 import { GoogleGenAI } from '@google/genai';
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
 
 export const getAuctions = (req, res) => {
   try {
-    const auctions = db.getAuctions();
-    res.json({ auctions });
+    let auctions = db.getAuctions();
+    if (req.user.role === 'Seller') auctions = auctions.filter(a => db.canManageAuction(a, req.user.email));
+    if (req.query?.view === 'live' || (req.user.role !== 'Seller' && req.query?.view !== 'history')) auctions = auctions.filter(a => a.is_visible_live);
+    if (req.user.role !== 'Seller' && req.query?.view === 'history') auctions = auctions.filter(a =>
+      a.registrations.some(r => r.buyer_id === req.user.email) || a.participants.some(p => p.buyer_id === req.user.email) || a.winner_id === req.user.email);
+    res.json({ auctions: auctions.map(a => visibleAuction(a, req.user)) });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(400).json({ error: error.message });
   }
 };
 
@@ -22,9 +26,9 @@ export const getAuctionById = (req, res) => {
     if (!auction) {
       return res.status(404).json({ error: "Auction not found" });
     }
-    res.json({ auction });
+    res.json({ auction: visibleAuction(auction, req.user) });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(400).json({ error: error.message });
   }
 };
 
@@ -35,9 +39,9 @@ export const getAuctionByProperty = (req, res) => {
     if (!auction) {
       return res.status(404).json({ error: "Auction not found for this property" });
     }
-    res.json({ auction });
+    res.json({ auction: visibleAuction(auction, req.user) });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(400).json({ error: error.message });
   }
 };
 
@@ -49,17 +53,15 @@ export const createAuction = (req, res) => {
       starting_price, startingPrice,
       minimum_increment, minIncrement, minimumIncrement,
       duration_hours, durationHours,
-      max_participants, maxParticipants,
-      auction_start, auctionStart
+      max_participants, maxParticipants
     } = req.body;
 
     const finalPropertyId = property_id || propertyId;
-    const finalSellerId = seller_id || sellerId || 'seller@apexrealty.com';
-    const finalStartingPrice = starting_price || startingPrice;
-    const finalMinIncrement = minimum_increment || minIncrement || minimumIncrement || 1;
-    const finalDurationHours = duration_hours || durationHours || 24;
-    const finalMaxParticipants = max_participants || maxParticipants || 10;
-    const finalAuctionStart = auction_start || auctionStart;
+    const finalSellerId = req.user.email;
+    const finalStartingPrice = starting_price ?? startingPrice;
+    const finalMinIncrement = minimum_increment ?? minIncrement ?? minimumIncrement ?? 1;
+    const finalDurationHours = duration_hours ?? durationHours ?? 24;
+    const finalMaxParticipants = max_participants ?? maxParticipants ?? 10;
 
     if (!finalPropertyId || !finalStartingPrice) {
       return res.status(400).json({ error: "property_id and starting_price are required" });
@@ -68,15 +70,14 @@ export const createAuction = (req, res) => {
     const newAuction = db.createAuction({
       property_id: String(finalPropertyId),
       seller_id: finalSellerId,
-      starting_price: parseFloat(finalStartingPrice),
-      minimum_increment: parseFloat(finalMinIncrement),
-      duration_hours: parseFloat(finalDurationHours),
-      max_participants: parseInt(finalMaxParticipants, 10),
-      auction_start: finalAuctionStart
+      starting_price: finalStartingPrice,
+      minimum_increment: finalMinIncrement,
+      duration_hours: finalDurationHours,
+      max_participants: finalMaxParticipants
     });
-    res.status(201).json({ message: "Auction created and registration opened!", auction: newAuction });
+    res.status(201).json({ message: "Live auction launched successfully!", auction: newAuction });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(400).json({ error: error.message });
   }
 };
 
@@ -90,9 +91,9 @@ export const requestRegistration = (req, res) => {
       buyer_phone, buyerPhone
     } = req.body;
 
-    const finalBuyerId = buyer_id || buyerId;
-    const finalBuyerName = buyer_name || buyerName || 'Buyer';
-    const finalBuyerEmail = buyer_email || buyerEmail || finalBuyerId;
+    const finalBuyerId = req.user.email;
+    const finalBuyerName = req.user.name;
+    const finalBuyerEmail = req.user.email;
     const finalBuyerPhone = buyer_phone || buyerPhone || '+91 98765 00000';
 
     if (!finalBuyerId) {
@@ -120,7 +121,7 @@ export const updateRegistrationStatus = (req, res) => {
       return res.status(400).json({ error: "status is required ('APPROVED' or 'REJECTED')" });
     }
 
-    const reg = db.updateRegistrationStatus(registrationId, status, sellerId || seller_id);
+    const reg = db.updateRegistrationStatus(registrationId, status, req.user.email);
     res.json({ message: `Registration request ${status.toLowerCase()}!`, registration: reg });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -136,7 +137,7 @@ export const updateAuctionStatus = (req, res) => {
       return res.status(400).json({ error: "status is required" });
     }
 
-    const updatedAuction = db.updateAuctionStatus(auctionId, status, sellerId || seller_id);
+    const updatedAuction = db.updateAuctionStatus(auctionId, status, req.user.email);
     res.json({ message: `Auction status updated to ${status}`, auction: updatedAuction });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -152,22 +153,22 @@ export const placeAuctionBid = (req, res) => {
       bidAmount, bid_amount, amount
     } = req.body;
 
-    const finalBuyerId = buyerId || buyer_id || bidderEmail || bidder_email || email || 'buyer@apexrealty.com';
-    const finalBuyerName = buyerName || buyer_name || bidderName || bidder_name || name || 'Authorized Investor';
+    const finalBuyerId = req.user.email;
+    const finalBuyerName = req.user.name;
     const rawBidAmount = bidAmount !== undefined ? bidAmount : (bid_amount !== undefined ? bid_amount : amount);
 
-    if (!targetId || rawBidAmount === undefined || rawBidAmount === null || isNaN(parseFloat(rawBidAmount))) {
+    if (!targetId || rawBidAmount === undefined || rawBidAmount === null || !Number.isFinite(Number(rawBidAmount))) {
       return res.status(400).json({ error: "A valid bid amount is required" });
     }
 
-    const finalBidAmount = parseFloat(rawBidAmount);
+    const finalBidAmount = rawBidAmount;
     const newBid = db.placeAuctionBid(targetId, finalBuyerId, finalBuyerName, finalBidAmount);
     const updatedAuction = db.getAuctionById(targetId) || db.getAuctionByPropertyId(newBid.property_id || targetId);
 
     res.status(201).json({
       message: "Bid placed successfully!",
       bid: newBid,
-      auction: updatedAuction,
+      auction: visibleAuction(updatedAuction, req.user),
       property: updatedAuction?.property || db.getPropertyById(newBid.property_id || targetId)
     });
   } catch (error) {
@@ -186,7 +187,7 @@ export const sellProperty = (req, res) => {
 
     const finalBuyerId = buyerId || buyer_id || selectedBuyerId || selected_buyer_id;
     const finalSellingPrice = finalPrice !== undefined ? finalPrice : final_price;
-    const finalSellerId = sellerId || seller_id;
+    const finalSellerId = req.user.email;
 
     if (!finalBuyerId) {
       return res.status(400).json({ error: "buyerId is required to complete property sale" });
@@ -202,61 +203,64 @@ export const sellProperty = (req, res) => {
 export const getUserRegistrations = (req, res) => {
   try {
     const { buyerId } = req.params;
+    if (buyerId !== req.user.email) return res.status(403).json({ error: 'Access denied' });
     const registrations = db.getUserRegistrations(buyerId);
     res.json({ buyerId, registrations });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(400).json({ error: error.message });
   }
 };
 
 export const getBuyerTokens = (req, res) => {
   try {
     const { buyerId } = req.params;
+    if (buyerId !== req.user.email) return res.status(403).json({ error: 'Access denied' });
     const tokens = db.getBuyerTokens(buyerId);
     res.json({ buyerId, tokens });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(400).json({ error: error.message });
   }
 };
 
 export const topupBuyerTokens = (req, res) => {
   try {
     const { buyerId } = req.params;
+    if (buyerId !== req.user.email) return res.status(403).json({ error: 'Access denied' });
     const { amount } = req.body;
-    const tokens = db.topupBuyerTokens(buyerId, amount ? parseInt(amount) : 5);
+    const tokens = db.topupBuyerTokens(buyerId, amount ?? 5);
     res.json({ message: "Tokens topped up successfully!", tokens });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(400).json({ error: error.message });
   }
 };
 
 export const getNotifications = (req, res) => {
   try {
     const { userId } = req.query;
-    const notifications = db.getNotifications(userId);
+    const notifications = db.getNotifications(req.user.email, req.user.role);
     res.json({ notifications });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(400).json({ error: error.message });
   }
 };
 
 export const markNotificationRead = (req, res) => {
   try {
     const { id } = req.params;
-    db.markNotificationRead(id);
+    db.markNotificationRead(id, req.user.email, req.user.role);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(400).json({ error: error.message });
   }
 };
 
 export const markAllNotificationsRead = (req, res) => {
   try {
     const { userId } = req.body;
-    db.markAllNotificationsRead(userId);
+    db.markAllNotificationsRead(req.user.email, req.user.role);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(400).json({ error: error.message });
   }
 };
 
@@ -278,6 +282,8 @@ Winner: ${auction.winner_name || 'Selected Buyer'}
 
 Provide a 3-bullet executive summary focusing on market valuation, competitive bidding intensity, and seller decision highlights. Keep concise.`;
 
+    if (!process.env.GEMINI_API_KEY) return res.status(503).json({ error: 'AI reports are not configured' });
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt
@@ -288,3 +294,14 @@ Provide a 3-bullet executive summary focusing on market valuation, competitive b
     res.status(500).json({ error: error.message, report: "Property transaction finalized under seller agreement." });
   }
 };
+
+function visibleAuction(auction, user) {
+  if (!auction) return auction;
+  if (user.role === 'Seller' && db.canManageAuction(auction, user.email)) return { ...auction, can_manage_auction: true, can_sell: auction.seller_id === user.email, management_access: auction.seller_id === user.email ? 'OWNER' : 'AUCTION_MANAGER' };
+  return { ...auction,
+    registrations: auction.registrations.filter(r => r.buyer_id === user.email),
+    participants: auction.participants.filter(p => p.buyer_id === user.email),
+    distinct_bidders: [],
+    bids: auction.bids.map(({ buyer_id, ...bid }) => ({ ...bid, ...(buyer_id === user.email ? { buyer_id } : {}) }))
+  };
+}

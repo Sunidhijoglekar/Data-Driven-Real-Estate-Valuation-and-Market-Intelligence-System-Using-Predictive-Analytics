@@ -1,8 +1,11 @@
+import { randomUUID } from 'node:crypto';
 /**
  * Property Controller - Property listings, search, filtering, and CRUD operations
  */
 import { db } from '../database/db.js';
 import { computePropertyValuation } from '../utils/mlEngine.js';
+
+const presentProperty = property => ({ ...property, ...db.getPropertyAuctionState(property.id) });
 
 export const getProperties = (req, res) => {
   try {
@@ -23,7 +26,7 @@ export const getProperties = (req, res) => {
       return res.json({
         total: featuredList.length,
         count: featuredList.length,
-        properties: featuredList
+        properties: featuredList.map(presentProperty)
       });
     }
 
@@ -246,7 +249,7 @@ export const getProperties = (req, res) => {
       totalPages: !isNaN(limitNum) && limitNum > 0 ? Math.ceil(totalFiltered / limitNum) : 1,
       isRecommendation,
       recommendationMessage: isRecommendation ? (recommendationMessage || "Showing the closest matching properties based on your selected filters.") : null,
-      properties: paginatedProperties
+      properties: paginatedProperties.map(presentProperty)
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -264,7 +267,7 @@ export const getPropertyById = (req, res) => {
     const valuation = computePropertyValuation(property);
 
     res.json({
-      ...property,
+      ...presentProperty(property),
       valuation
     });
   } catch (error) {
@@ -284,6 +287,9 @@ export const createProperty = (req, res) => {
       return res.status(400).json({ error: "Name, City, Price, and Area are required" });
     }
 
+    for (const [label, value] of [['price', price], ['area', area], ...(auctionEnabled ? [['starting price', startingPrice ?? price], ['increment', minIncrement ?? 1]] : [])]) {
+      if (!Number.isFinite(Number(value)) || Number(value) <= 0) return res.status(400).json({ error: `${label} must be a positive finite number` });
+    }
     const defaultImages = [
       "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=800&q=80",
       "https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=800&q=80",
@@ -291,7 +297,7 @@ export const createProperty = (req, res) => {
     ];
 
     const newProp = {
-      id: `prop-${Date.now()}`,
+      id: `prop-${randomUUID()}`,
       name,
       city,
       locality: locality || city,
@@ -306,17 +312,17 @@ export const createProperty = (req, res) => {
       lat: 12.9716,
       lng: 77.5946,
       seller: req.body.seller || "Current Seller",
-      sellerEmail: req.body.sellerEmail || "seller@apexrealty.com",
+      sellerEmail: req.user.email,
       description: description || "Modern residential property with excellent transport connectivity.",
-      auctionEnabled: Boolean(auctionEnabled),
+      auctionEnabled: false,
       startingPrice: parseFloat(startingPrice) || parseFloat(price),
       minIncrement: parseFloat(minIncrement) || 1,
-      auctionEnd: auctionEnabled ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() : null,
+      auctionEnd: null,
       bids: []
     };
 
     const saved = db.addProperty(newProp);
-    res.status(201).json({ message: "Property added successfully", property: saved });
+    res.status(201).json({ message: "Property added successfully", property: presentProperty(saved) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -325,11 +331,19 @@ export const createProperty = (req, res) => {
 export const updateProperty = (req, res) => {
   try {
     const { id } = req.params;
-    const updated = db.updateProperty(id, req.body);
+    const allowed = ['name', 'city', 'locality', 'price', 'area', 'bhk', 'bathrooms', 'age', 'amenities', 'description', 'image', 'auctionEnabled', 'startingPrice', 'minIncrement'];
+    if (Object.keys(req.body).some(key => !allowed.includes(key))) return res.status(400).json({ error: 'Unsupported property fields' });
+    for (const key of ['price', 'area', 'startingPrice', 'minIncrement']) {
+      if (req.body[key] !== undefined && (!Number.isFinite(Number(req.body[key])) || Number(req.body[key]) <= 0)) return res.status(400).json({ error: `${key} must be positive` });
+    }
+    const fields = Object.fromEntries(Object.entries(req.body).filter(([key]) => allowed.includes(key)));
+    const auction = db.getAuctionByPropertyId(id);
+    if (auction && !['ENDED', 'CLOSED', 'CANCELLED'].includes(auction.status) && !(Object.keys(fields).length === 1 && fields.auctionEnabled === false)) return res.status(400).json({ error: 'Close the auction before editing its property' });
+    const updated = db.updateProperty(id, fields);
     if (!updated) {
       return res.status(404).json({ error: "Property not found" });
     }
-    res.json({ message: "Property updated successfully", property: updated });
+    res.json({ message: "Property updated successfully", property: presentProperty(updated) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -338,6 +352,8 @@ export const updateProperty = (req, res) => {
 export const deleteProperty = (req, res) => {
   try {
     const { id } = req.params;
+    const auction = db.getAuctionByPropertyId(id);
+    if (auction && !['ENDED', 'CLOSED', 'CANCELLED'].includes(auction.status)) return res.status(400).json({ error: 'Close the auction before deleting its property' });
     const deleted = db.deleteProperty(id);
     if (!deleted) {
       return res.status(404).json({ error: "Property not found" });

@@ -1,11 +1,30 @@
 import axios from 'axios';
+import { sessionStore } from './session.js';
 
-const API = axios.create({
-  baseURL: '/api',
-  headers: {
-    'Content-Type': 'application/json'
-  }
-});
+export function createApiClient(store = sessionStore, onSessionExpired = () => window.location.assign('/login')) {
+  const client = axios.create({
+    baseURL: '/api',
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  });
+
+  client.interceptors.request.use(config => {
+    const token = store.read()?.token;
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+    return config;
+  });
+  client.interceptors.response.use(response => response, error => {
+    const sentToken = error.config?.headers?.Authorization;
+    if (error.response?.status === 401 && !error.config?.url?.startsWith('/auth/') && sentToken === `Bearer ${store.read()?.token}`) {
+      store.clear();
+      onSessionExpired();
+    }
+    return Promise.reject(error);
+  });
+  return client;
+}
+const API = createApiClient();
 
 export const apiService = {
   // Auth
@@ -14,11 +33,17 @@ export const apiService = {
     return res.data;
   },
 
+  register: async (credentials) => (await API.post('/auth/register', credentials)).data,
+  getSession: async () => (await API.get('/auth/me')).data,
+  logout: async () => (await API.post('/auth/logout')).data,
+
   // Properties
   getProperties: async (filters = {}) => {
     const res = await API.get('/properties', { params: filters });
     return res.data;
   },
+
+  getSellerAuctionInventory: async () => (await API.get('/properties/auction-inventory')).data,
 
   getPropertyById: async (id) => {
     const res = await API.get(`/properties/${id}`);
@@ -41,8 +66,8 @@ export const apiService = {
   },
 
   // Bidding & Auction System
-  getAuctions: async () => {
-    const res = await API.get('/bids/auctions');
+  getAuctions: async (options = {}) => {
+    const res = await API.get('/bids/auctions', { params: options });
     return res.data;
   },
 
@@ -108,12 +133,8 @@ export const apiService = {
 
   // Notifications
   getNotifications: async (userId) => {
-    try {
-      const res = await API.get('/bids/notifications', { params: { userId } });
-      return res.data;
-    } catch {
-      return { notifications: [] };
-    }
+    const res = await API.get('/bids/notifications', { params: { userId } });
+    return res.data;
   },
 
   markNotificationRead: async (id) => {
